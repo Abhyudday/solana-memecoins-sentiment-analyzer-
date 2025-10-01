@@ -1020,7 +1020,14 @@ def main() -> None:
     
     # Start the bot
     logger.info("Starting Solana Memecoins Sentiment Analyzer Bot...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Ensure an event loop exists in environments where none is set
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    
+    # Run polling within an explicit event loop to avoid RuntimeError in some hosts
+    asyncio.run(application.run_polling(allowed_updates=Update.ALL_TYPES))
 
 
 if __name__ == "__main__":
