@@ -112,35 +112,78 @@ class DexScreenerClient:
     
     async def get_trending_pairs(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get trending Solana pairs."""
-        endpoint = "/latest/dex/pairs/solana"
+        # Use the boosted tokens endpoint which is more reliable
+        endpoint = "/token-boosts/top/v1"
         
-        data = await self._make_request(endpoint)
-        pairs = data.get("pairs", [])
+        try:
+            data = await self._make_request(endpoint)
+            boosted_tokens = data if isinstance(data, list) else []
+            
+            # Get pair info for each boosted token
+            all_pairs = []
+            for token_data in boosted_tokens[:30]:  # Check top 30 boosted tokens
+                if token_data.get("chainId") == "solana":
+                    token_address = token_data.get("tokenAddress")
+                    if token_address:
+                        pair_data = await self.get_pair_by_address(token_address)
+                        if pair_data:
+                            all_pairs.append(pair_data)
+                        
+                        # Add delay to avoid rate limiting
+                        await asyncio.sleep(0.3)
+                        
+                        if len(all_pairs) >= limit:
+                            break
+            
+            if all_pairs:
+                return all_pairs
+        except Exception as e:
+            logger.error(f"Error fetching boosted tokens: {e}")
         
-        # Filter for memecoins (typically have lower market caps and higher volatility)
-        memecoin_pairs = []
-        for pair in pairs:
-            # Basic memecoin filtering criteria
-            fdv = pair.get("fdv", 0)
-            volume_24h = pair.get("volume", {}).get("h24", 0) if pair.get("volume") else 0
-            
-            # Consider it a memecoin if:
-            # - Market cap is reasonable for memecoins (100K - 100M)
-            # - Has decent volume
-            # - Base token is not a well-known token
-            base_token = pair.get("baseToken", {})
-            token_name = base_token.get("name", "").lower()
-            token_symbol = base_token.get("symbol", "").lower()
-            
-            # Skip well-known tokens
-            known_tokens = ["sol", "usdc", "usdt", "btc", "eth", "ray", "orca", "serum"]
-            if any(known in token_symbol for known in known_tokens):
+        # Fallback: search for popular Solana memecoins
+        logger.info("Using fallback search method")
+        search_terms = ["solana", "pump", "bonk", "dogwifhat", "pepe"]
+        all_pairs = []
+        
+        for term in search_terms:
+            try:
+                pairs = await self.search_pairs(term, limit=20)
+                # Filter for reasonable memecoin criteria
+                for pair in pairs:
+                    fdv = pair.get("fdv", 0)
+                    volume_24h = pair.get("volume", {}).get("h24", 0) if pair.get("volume") else 0
+                    
+                    base_token = pair.get("baseToken", {})
+                    token_symbol = base_token.get("symbol", "").lower()
+                    
+                    # Skip well-known tokens
+                    known_tokens = ["sol", "usdc", "usdt", "btc", "eth", "ray", "orca", "serum", "wsol"]
+                    if any(known == token_symbol for known in known_tokens):
+                        continue
+                    
+                    # More inclusive filter: 10K - 500M market cap, 100+ volume
+                    if (10_000 <= fdv <= 500_000_000 and volume_24h > 100):
+                        all_pairs.append(pair)
+                
+                # Add delay to avoid rate limiting
+                await asyncio.sleep(0.5)
+                
+                if len(all_pairs) >= limit:
+                    break
+            except Exception as e:
+                logger.error(f"Error searching pairs for term {term}: {e}")
                 continue
-            
-            if (100_000 <= fdv <= 100_000_000 and volume_24h > 1000):
-                memecoin_pairs.append(pair)
         
-        return memecoin_pairs[:limit]
+        # Remove duplicates based on token address
+        seen_addresses = set()
+        unique_pairs = []
+        for pair in all_pairs:
+            address = pair.get("baseToken", {}).get("address")
+            if address and address not in seen_addresses:
+                seen_addresses.add(address)
+                unique_pairs.append(pair)
+        
+        return unique_pairs[:limit]
     
     def _parse_pair_data(self, pair_data: Dict[str, Any]) -> Dict[str, Any]:
         """Parse pair data into a standardized format."""

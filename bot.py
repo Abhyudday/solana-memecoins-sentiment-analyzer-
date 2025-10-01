@@ -915,13 +915,16 @@ async def edit_or_send_message(update: Update, text: str,
     except Exception as e:
         logger.error(f"Error editing/sending message: {e}")
         # Fallback to sending new message
-        if update.effective_chat:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=keyboard
-            )
+        if update.effective_chat and update.get_bot():
+            try:
+                await update.get_bot().send_message(
+                    chat_id=update.effective_chat.id,
+                    text=text,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=keyboard
+                )
+            except Exception as fallback_error:
+                logger.error(f"Fallback send_message also failed: {fallback_error}")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
