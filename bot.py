@@ -1003,9 +1003,15 @@ def main() -> None:
     # Add error handler
     application.add_error_handler(error_handler)
     
-    # Add periodic cache cleanup job (every 6 hours)
+    # Add periodic cache cleanup job (every 6 hours) if JobQueue is available
     job_queue = application.job_queue
-    job_queue.run_repeating(cleanup_cache_job, interval=21600, first=60)
+    if job_queue is not None:
+        job_queue.run_repeating(cleanup_cache_job, interval=21600, first=60)
+    else:
+        logger.warning(
+            "JobQueue not available. Skipping scheduled cache cleanup. "
+            "Install PTB with job-queue extra to enable: pip install \"python-telegram-bot[job-queue]\""
+        )
     
     # Initialize clients
     if not asyncio.run(init_clients()):
