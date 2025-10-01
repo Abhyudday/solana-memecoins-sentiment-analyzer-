@@ -193,6 +193,17 @@ def is_valid_solana_address(address: str) -> bool:
     return all(c in base58_chars for c in address)
 
 
+def is_ticker_symbol(text: str) -> bool:
+    """Check if text looks like a ticker symbol."""
+    text = text.strip()
+    # Remove $ if present
+    if text.startswith('$'):
+        text = text[1:]
+    
+    # Ticker should be 2-10 characters, alphanumeric
+    return len(text) >= 2 and len(text) <= 10 and text.replace('_', '').isalnum()
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command."""
     user = update.effective_user
@@ -582,39 +593,111 @@ async def handle_sentiment_analyze(update: Update, context: ContextTypes.DEFAULT
     text = """
 🔍 **Sentiment Analysis**
 
-Enter a Solana token contract address (CA) to analyze:
+Enter a Solana token to analyze:
 
 The bot will:
 1. Fetch 100+ live tweets from last 48h
 2. Analyze with Grok AI (no cached data)
 3. Provide real-time bullish/bearish/neutral signal
 
-**Example CA:**
-`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+**You can enter:**
+• Ticker symbol: `$WEED` or `BONK`
+• Contract address: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
 
-Enter the contract address:
+Enter ticker or contract address:
 """
     
     await edit_or_send_message(update, text, None)
 
 
-async def handle_ca_input(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
-    """Handle contract address input for sentiment analysis."""
+async def handle_ca_input(update: Update, context: ContextTypes.DEFAULT_TYPE, input_text: str) -> None:
+    """Handle contract address OR ticker symbol input for sentiment analysis."""
     user_id = update.effective_user.id
     set_user_state(user_id, BotState.NORMAL)
     
-    ca = ca.strip()
+    input_text = input_text.strip()
     
-    if not is_valid_solana_address(ca):
+    # Check if it's a ticker symbol (like $WEED or WEED)
+    if is_ticker_symbol(input_text):
+        # Remove $ if present
+        ticker = input_text.replace('$', '').upper()
+        
+        # Show searching message
+        searching_msg = await update.message.reply_text(
+            f"🔍 Searching for **{ticker}** on Solana...",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        try:
+            # Search DexScreener for this ticker
+            async with DexScreenerClient() as client:
+                results = await client.search_pairs(ticker, limit=5)
+            
+            if not results:
+                await searching_msg.edit_text(
+                    f"❌ **Ticker Not Found**\n\n"
+                    f"Could not find token **{ticker}** on Solana DEXs.\n\n"
+                    f"Try:\n"
+                    f"• Using the full contract address instead\n"
+                    f"• Checking the ticker spelling\n"
+                    f"• Using a more popular token",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=get_sentiment_menu_keyboard()
+                )
+                return
+            
+            # Use the first (best) result
+            best_match = results[0]
+            ca = best_match.get('baseToken', {}).get('address', '')
+            token_name = best_match.get('baseToken', {}).get('symbol', ticker)
+            
+            if not ca or not is_valid_solana_address(ca):
+                await searching_msg.edit_text(
+                    f"❌ **Invalid Token Data**\n\n"
+                    f"Found **{ticker}** but couldn't extract contract address.\n\n"
+                    f"Please try using the contract address directly.",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=get_sentiment_menu_keyboard()
+                )
+                return
+            
+            # Delete searching message and proceed
+            await searching_msg.delete()
+            
+            # Send confirmation and start analysis
+            await update.message.reply_text(
+                f"✅ Found **{token_name}** (${ticker})\n"
+                f"Contract: `{ca}`\n\n"
+                f"Starting sentiment analysis...",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            await analyze_token_sentiment(update, context, ca)
+            
+        except Exception as e:
+            logger.error(f"Error searching for ticker {ticker}: {e}")
+            await searching_msg.edit_text(
+                f"❌ **Search Error**\n\n"
+                f"Error searching for **{ticker}**.\n\n"
+                f"Please try again or use the contract address directly.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_sentiment_menu_keyboard()
+            )
+        return
+    
+    # Otherwise treat as contract address
+    if not is_valid_solana_address(input_text):
         await update.message.reply_text(
-            "❌ Invalid Solana contract address format.\n"
-            "Contract addresses should be 44 characters long.\n\n"
-            "Please try again:",
+            "❌ Invalid input format.\n\n"
+            "Please enter either:\n"
+            "• A Solana contract address (44 characters)\n"
+            "• A ticker symbol (e.g., $WEED or BONK)\n\n"
+            "Try again:",
             reply_markup=get_sentiment_menu_keyboard()
         )
         return
     
-    await analyze_token_sentiment(update, context, ca)
+    await analyze_token_sentiment(update, context, input_text)
 
 
 async def analyze_token_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
@@ -785,9 +868,9 @@ You can create custom filters using natural language:
 📊 **Sentiment Analysis Help**
 
 **How It Works:**
-1. Enter a Solana token contract address
+1. Enter ticker symbol ($WEED) or contract address
 2. Bot searches real-time Twitter mentions (last 48 hours)
-3. Grok AI analyzes tweet sentiment
+3. Grok AI analyzes 100+ tweets with grok-3 model
 4. Results show: Bullish, Bearish, or Neutral signal with explanation
 
 **What It Analyzes:**
