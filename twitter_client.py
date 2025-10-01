@@ -43,30 +43,31 @@ class TwitterClient:
             return []
         
         # Build search query - prioritize token name as tweets rarely include full CA
+        # Note: Avoid cashtag ($) operator as it's not available in basic Twitter API tiers
         query_parts = []
         
         # If we have a token name, prioritize it (most common in tweets)
         if token_name and len(token_name) > 2:
             token_name_clean = token_name.strip()
-            # Add token name variations - most tweets use these
+            # Add token name - quoted for exact match and plain
             query_parts.append(f'"{token_name_clean}"')
-            query_parts.append(f'${token_name_clean}')  # With $ prefix
             # Only add plain name if it's not too short/common
             if len(token_name_clean) > 3:
                 query_parts.append(token_name_clean)
         else:
-            # No token name - search by CA (less common but still valid)
-            # Use first and last 8 chars which are sometimes used in tweets
+            # No token name - search by CA
+            # Use partial CA strings which are more common in tweets
             ca_start = ca[:12]
             ca_end = ca[-12:]
-            query_parts.append(ca)
             query_parts.append(ca_start)
             query_parts.append(ca_end)
         
         # Combine with OR and add context filters
-        # Keep query under Twitter's limit (~512 chars)
-        base_query = ' OR '.join(query_parts[:5])  # Limit to 5 parts max
-        query = f"({base_query}) (solana OR sol) lang:en -is:retweet"
+        # Keep query simple and under Twitter's limit
+        base_query = ' OR '.join(query_parts[:3])  # Limit to 3 parts max
+        query = f"({base_query}) (solana OR crypto) -is:retweet lang:en"
+        
+        logger.info(f"Twitter search query: {query}")
         
         # Calculate start time (days back)
         start_time = datetime.utcnow() - timedelta(days=days_back)

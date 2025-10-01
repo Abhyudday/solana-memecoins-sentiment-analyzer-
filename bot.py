@@ -671,10 +671,50 @@ This may take 30-60 seconds...
                     # Cache token info
                     db.cache_memecoin(token_info)
             
-            # Search tweets
-            tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=50)
+            # Search tweets - use 3 days back to get more results
+            tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=50, days_back=3)
             
-            if len(tweets) < 5:
+            # If no tweets found, check if it's a rate limit issue or genuinely no tweets
+            if len(tweets) == 0:
+                # Try to use older cached sentiment if available (up to 24 hours)
+                older_cached_sentiment = db.get_cached_sentiment(ca, max_age_hours=24)
+                if older_cached_sentiment:
+                    logger.info(f"Using older cached sentiment for {ca} due to no tweets found")
+                    sentiment = older_cached_sentiment.sentiment
+                    explanation = older_cached_sentiment.explanation
+                    tweet_count = older_cached_sentiment.tweet_count
+                    sample_tweets = json.loads(older_cached_sentiment.sample_tweets) if older_cached_sentiment.sample_tweets else []
+                    
+                    # Format and send results with a note about cache
+                    base_result = format_sentiment_result(sentiment, explanation, tweet_count, sample_tweets, token_name)
+                    result_text = f"""
+{base_result}
+
+⚠️ _Note: Using cached data. Twitter API may be rate limited._
+"""
+                    keyboard = get_sentiment_result_keyboard(ca, True)
+                    await edit_or_send_message(update, result_text, keyboard)
+                    return
+                
+                # No cache available - show rate limit error
+                rate_limit_text = f"""
+📊 **Sentiment Analysis - {token_name}**
+
+⏱️ **Twitter API Rate Limit**
+
+The Twitter API is currently rate limited. Please try again in a few minutes.
+
+Alternatively:
+• Try a different token
+• Check back in 15 minutes
+
+Twitter's free tier has limited requests per 15-minute window.
+"""
+                keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
+                await edit_or_send_message(update, rate_limit_text, keyboard)
+                return
+            
+            if len(tweets) < 3:
                 no_activity_text = f"""
 📊 **Sentiment Analysis - {token_name}**
 
@@ -682,7 +722,7 @@ This may take 30-60 seconds...
 
 Found only {len(tweets)} recent tweets mentioning this token.
 
-Need at least 5 tweets for reliable sentiment analysis.
+Need at least 3 tweets for reliable sentiment analysis.
 
 This could mean:
 • New or low-activity token
@@ -931,12 +971,16 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Handle errors."""
     logger.error(f"Update {update} caused error {context.error}")
     
-    if update.effective_chat:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="❌ An unexpected error occurred. Please try again or use /start to restart.",
-            reply_markup=get_main_menu_keyboard()
-        )
+    # Only send message if we have a valid update with a chat
+    if update and update.effective_chat:
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ An unexpected error occurred. Please try again or use /start to restart.",
+                reply_markup=get_main_menu_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Error sending error message: {e}")
 
 
 async def init_clients() -> bool:
