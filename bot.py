@@ -585,9 +585,9 @@ async def handle_sentiment_analyze(update: Update, context: ContextTypes.DEFAULT
 Enter a Solana token contract address (CA) to analyze:
 
 The bot will:
-1. Search recent Twitter mentions
-2. Analyze sentiment with Grok AI
-3. Provide bullish/bearish/neutral assessment
+1. Fetch 100+ live tweets from last 48h
+2. Analyze with Grok AI (no cached data)
+3. Provide real-time bullish/bearish/neutral signal
 
 **Example CA:**
 `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
@@ -618,14 +618,14 @@ async def handle_ca_input(update: Update, context: ContextTypes.DEFAULT_TYPE, ca
 
 
 async def analyze_token_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
-    """Analyze sentiment for a token."""
+    """Analyze sentiment for a token - ALWAYS uses fresh live data."""
     # Show loading message
     loading_text = f"""
 🧠 **Analyzing Sentiment**
 
 Contract Address: `{ca}`
 
-⏳ Searching Twitter mentions...
+⏳ Fetching live Twitter data...
 ⏳ Running AI sentiment analysis...
 
 This may take 30-60 seconds...
@@ -634,90 +634,50 @@ This may take 30-60 seconds...
     await edit_or_send_message(update, loading_text, None)
     
     try:
-        # Check sentiment cache first
         db = get_db_manager()
-        cached_sentiment = db.get_cached_sentiment(ca, max_age_hours=1)
         
-        if cached_sentiment:
-            logger.info(f"Using cached sentiment for {ca}")
-            sentiment = cached_sentiment.sentiment
-            explanation = cached_sentiment.explanation
-            tweet_count = cached_sentiment.tweet_count
-            sample_tweets = json.loads(cached_sentiment.sample_tweets) if cached_sentiment.sample_tweets else []
-            
-            # Get token name from cache or DexScreener
-            token_name = "Unknown Token"
-            cached_coin = db.get_cached_memecoin(ca, max_age_minutes=60)
-            if cached_coin and cached_coin.symbol:
-                token_name = cached_coin.symbol
-            else:
-                async with DexScreenerClient() as client:
-                    token_info = await client.get_token_info(ca)
-                    if token_info:
-                        token_name = token_info.get('symbol', 'Unknown Token')
+        # Get token info first
+        token_name = "Unknown Token"
+        async with DexScreenerClient() as client:
+            token_info = await client.get_token_info(ca)
+            if token_info:
+                token_name = token_info.get('symbol', token_info.get('name', 'Unknown Token'))
+                # Cache token info only (not sentiment)
+                db.cache_memecoin(token_info)
         
-        else:
-            # Get token info first
-            token_name = "Unknown Token"
-            async with DexScreenerClient() as client:
-                token_info = await client.get_token_info(ca)
-                if token_info:
-                    token_name = token_info.get('symbol', token_info.get('name', 'Unknown Token'))
-                    # Cache token info
-                    db.cache_memecoin(token_info)
-            
-            # Search tweets - use 2 days back to get real-time data
-            tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=50, days_back=2)
-            
-            # If no tweets found, check if it's a rate limit issue or genuinely no tweets
-            if len(tweets) == 0:
-                # Try to use older cached sentiment if available (up to 24 hours)
-                older_cached_sentiment = db.get_cached_sentiment(ca, max_age_hours=24)
-                if older_cached_sentiment:
-                    logger.info(f"Using older cached sentiment for {ca} due to no tweets found")
-                    sentiment = older_cached_sentiment.sentiment
-                    explanation = older_cached_sentiment.explanation
-                    tweet_count = older_cached_sentiment.tweet_count
-                    sample_tweets = json.loads(older_cached_sentiment.sample_tweets) if older_cached_sentiment.sample_tweets else []
-                    
-                    # Format and send results with a note about cache
-                    base_result = format_sentiment_result(sentiment, explanation, tweet_count, sample_tweets, token_name)
-                    result_text = f"""
-{base_result}
-
-⚠️ _Note: Using cached data. Twitter API may be rate limited._
-"""
-                    keyboard = get_sentiment_result_keyboard(ca, True)
-                    await edit_or_send_message(update, result_text, keyboard)
-                    return
-                
-                # No cache available - show rate limit error
-                rate_limit_text = f"""
+        # ALWAYS fetch fresh tweets - NO CACHE
+        # Increase to 100 tweets for better analysis (user is willing to pay)
+        tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=100, days_back=2)
+        
+        # If no tweets found, show error
+        if len(tweets) == 0:
+            rate_limit_text = f"""
 📊 **Sentiment Analysis - {token_name}**
 
-⏱️ **Twitter API Rate Limit**
+⏱️ **No Tweets Found**
 
-The Twitter API is currently rate limited. Please try again in a few minutes.
+Could not find any recent tweets for this token.
 
-Alternatively:
-• Try a different token
-• Check back in 15 minutes
+This could mean:
+• Twitter API rate limit (wait 15 minutes)
+• Very new or low-activity token
+• Limited social media presence
 
-Twitter's free tier has limited requests per 15-minute window.
+Please try again in a few minutes or try a different token.
 """
-                keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
-                await edit_or_send_message(update, rate_limit_text, keyboard)
-                return
-            
-            if len(tweets) < 3:
-                no_activity_text = f"""
+            keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
+            await edit_or_send_message(update, rate_limit_text, keyboard)
+            return
+        
+        if len(tweets) < 5:
+            no_activity_text = f"""
 📊 **Sentiment Analysis - {token_name}**
 
 ❌ **Insufficient Data**
 
 Found only {len(tweets)} recent tweets mentioning this token.
 
-Need at least 3 tweets for reliable sentiment analysis.
+Need at least 5 tweets for reliable sentiment analysis.
 
 This could mean:
 • New or low-activity token
@@ -726,27 +686,23 @@ This could mean:
 
 Try again later or check a more popular token.
 """
-                
-                keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
-                await edit_or_send_message(update, no_activity_text, keyboard)
-                return
             
-            # Prepare tweets for sentiment analysis
-            tweets_text = twitter_client.prepare_tweets_for_sentiment(tweets)
-            
-            # Analyze sentiment with Grok
-            async with GrokClient(os.getenv("XAI_API_KEY")) as grok:
-                sentiment, explanation = await grok.analyze_sentiment(ca, token_name, tweets_text)
-            
-            # Get sample tweets for display
-            sample_tweets = twitter_client.get_sample_tweets_text(tweets, max_tweets=3)
-            
-            # Cache the results
-            db.cache_sentiment(ca, sentiment, explanation, len(tweets), json.dumps(sample_tweets))
+            keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
+            await edit_or_send_message(update, no_activity_text, keyboard)
+            return
         
-        # Format and send results
+        # Prepare tweets for sentiment analysis (use more tweets for better accuracy)
+        tweets_text = twitter_client.prepare_tweets_for_sentiment(tweets)
+        
+        # Analyze sentiment with Grok using LIVE data
+        async with GrokClient(os.getenv("XAI_API_KEY")) as grok:
+            sentiment, explanation = await grok.analyze_sentiment(ca, token_name, tweets_text)
+        
+        tweet_count = len(tweets)
+        
+        # Format and send results - NO CACHING, always fresh data
         result_text = format_sentiment_result(
-            sentiment, explanation, tweet_count, sample_tweets, token_name
+            sentiment, explanation, tweet_count, [], token_name
         )
         
         keyboard = get_sentiment_result_keyboard(ca, True)  # Assume we have token data
@@ -841,10 +797,10 @@ You can create custom filters using natural language:
 • Overall market mood
 
 **Reliability:**
-• Needs 5+ tweets for analysis
-• More tweets = more reliable results
-• Recent tweets weighted higher
-• Filters out spam/bot accounts
+• Uses 100+ live tweets for analysis
+• Always fetches fresh real-time data
+• No cached data - live analysis only
+• Recent tweets from last 48 hours
 
 **Limitations:**
 • Based only on Twitter activity

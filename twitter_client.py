@@ -73,15 +73,17 @@ class TwitterClient:
         start_time = datetime.utcnow() - timedelta(days=days_back)
         
         try:
+            # Use tweepy.Paginator to fetch more tweets
+            # For paid API, we can request up to 100 per request and paginate
             tweets = tweepy.Paginator(
                 self.client.search_recent_tweets,
                 query=query,
-                max_results=min(max_results, 100),  # Twitter API limit
+                max_results=100,  # Max per request for Twitter API v2
                 start_time=start_time,
                 tweet_fields=['created_at', 'author_id', 'public_metrics', 'context_annotations'],
                 expansions=['author_id'],
                 user_fields=['username', 'verified', 'public_metrics']
-            ).flatten(limit=max_results)
+            ).flatten(limit=max_results)  # Total limit
             
             tweet_data = []
             users_data = {}
@@ -156,7 +158,8 @@ class TwitterClient:
             return ""
         
         tweet_texts = []
-        for i, tweet in enumerate(tweets[:20], 1):  # Limit to 20 tweets for API
+        # Use more tweets for better analysis (up to 50)
+        for i, tweet in enumerate(tweets[:50], 1):
             text = tweet.get('text', '').strip()
             if text:
                 tweet_texts.append(f"Tweet {i}: {text}")

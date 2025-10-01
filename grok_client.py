@@ -82,7 +82,8 @@ EXPLANATION: [Your 3-4 line explanation]"""
             ],
             "model": "grok-3",
             "stream": False,
-            "temperature": 0.3
+            "temperature": 0.3,
+            "max_tokens": 500
         }
         
         try:
