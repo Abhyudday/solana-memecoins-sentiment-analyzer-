@@ -154,24 +154,19 @@ def format_sentiment_result(sentiment: str, explanation: str, tweet_count: int,
     }
     
     emoji = sentiment_emoji.get(sentiment.lower(), "⚪")
+    signal = sentiment.upper()
     
     result = f"""
 🧠 **Sentiment Analysis for {token_name}**
 
-{emoji} **Sentiment:** {sentiment.title()}
+{emoji} **Signal: {signal}**
 
-💭 **Analysis:** {explanation}
+💭 **Analysis:**
+{explanation}
 
-📊 **Based on {tweet_count} recent tweets**
-
+📊 **Based on {tweet_count} real-time tweets (last 48h)**
+⏰ **Analyzed:** {datetime.now().strftime('%H:%M UTC')}
 """
-    
-    if sample_tweets:
-        result += "📝 **Sample Tweets:**\n\n"
-        for tweet in sample_tweets[:3]:
-            result += f"• {tweet}\n\n"
-    
-    result += f"⏰ **Analyzed:** {datetime.now().strftime('%H:%M UTC')}"
     
     return result.strip()
 
@@ -344,12 +339,12 @@ async def show_sentiment_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = """
 📊 **Sentiment Analyzer**
 
-Analyze Twitter sentiment for any Solana memecoin:
+Analyze real-time Twitter sentiment for any Solana memecoin:
 
 🔍 **Analyze Token** - Enter contract address
 ℹ️ **How it Works** - Learn about the analysis
 
-The bot searches recent tweets and uses Grok AI to determine if the community sentiment is bullish, bearish, or neutral.
+The bot searches tweets from the last 48 hours and uses Grok AI to determine if the community sentiment is bullish, bearish, or neutral.
 """
     
     await edit_or_send_message(update, text, get_sentiment_menu_keyboard())
@@ -671,8 +666,8 @@ This may take 30-60 seconds...
                     # Cache token info
                     db.cache_memecoin(token_info)
             
-            # Search tweets - use 3 days back to get more results
-            tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=50, days_back=3)
+            # Search tweets - use 2 days back to get real-time data
+            tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=50, days_back=2)
             
             # If no tweets found, check if it's a rate limit issue or genuinely no tweets
             if len(tweets) == 0:
@@ -835,9 +830,9 @@ You can create custom filters using natural language:
 
 **How It Works:**
 1. Enter a Solana token contract address
-2. Bot searches recent Twitter mentions (last 7 days)
+2. Bot searches real-time Twitter mentions (last 48 hours)
 3. Grok AI analyzes tweet sentiment
-4. Results show: Bullish, Bearish, or Neutral
+4. Results show: Bullish, Bearish, or Neutral signal with explanation
 
 **What It Analyzes:**
 • Community excitement/fear

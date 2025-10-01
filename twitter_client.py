@@ -36,7 +36,7 @@ class TwitterClient:
         return text.strip()
     
     async def search_tweets_by_ca(self, ca: str, token_name: str = "", 
-                                 max_results: int = 50, days_back: int = 7) -> List[Dict[str, Any]]:
+                                 max_results: int = 50, days_back: int = 2) -> List[Dict[str, Any]]:
         """Search for tweets mentioning a contract address or token name."""
         if not self._is_valid_solana_address(ca):
             logger.error(f"Invalid Solana address: {ca}")

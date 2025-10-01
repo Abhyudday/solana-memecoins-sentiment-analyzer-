@@ -237,8 +237,9 @@ class DexScreenerClient:
             
             filtered_pairs.append(parsed_data)
         
-        # Sort by market cap descending
-        filtered_pairs.sort(key=lambda x: x["mc"], reverse=True)
+        # Sort by most active/latest - use volume and price change as indicators
+        # Higher volume and higher abs(price_change) = more recent activity
+        filtered_pairs.sort(key=lambda x: (x["volume_24h"] * (1 + abs(x["price_change_24h"])/100)), reverse=True)
         return filtered_pairs[:20]  # Limit to top 20
     
     async def get_token_info(self, ca: str) -> Optional[Dict[str, Any]]:

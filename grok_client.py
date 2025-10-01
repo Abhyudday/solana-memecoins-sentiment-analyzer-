@@ -27,22 +27,25 @@ class GrokClient:
     
     def _create_sentiment_prompt(self, ca: str, token_name: str, tweets_text: str) -> str:
         """Create a prompt for sentiment analysis."""
-        prompt = f"""Analyze these tweets for bullish/bearish sentiment on this Solana memecoin.
+        prompt = f"""Analyze these REAL-TIME tweets for bullish/bearish sentiment on this Solana memecoin.
 
 Contract Address: {ca}
 Token Name: {token_name}
 
-Tweets to analyze:
+Recent Tweets to analyze:
 {tweets_text}
 
 Instructions:
 1. Determine overall sentiment: "Bullish", "Bearish", or "Neutral"
-2. Provide a brief 1-sentence explanation of your reasoning
+2. Provide a concise explanation in 3-4 lines covering:
+   - Overall market sentiment
+   - Key signals from the tweets
+   - Community mood and activity level
 3. Consider factors like: price predictions, buying/selling sentiment, community excitement, fear/greed indicators
 
 Respond in this exact format:
 SENTIMENT: [Bullish/Bearish/Neutral]
-EXPLANATION: [Your 1-sentence explanation]"""
+EXPLANATION: [Your 3-4 line explanation]"""
 
         return prompt
     
@@ -77,7 +80,7 @@ EXPLANATION: [Your 1-sentence explanation]"""
                     "content": prompt
                 }
             ],
-            "model": "grok-beta",
+            "model": "grok-3",
             "stream": False,
             "temperature": 0.3
         }
@@ -180,7 +183,7 @@ EXPLANATION: [Your 1-sentence explanation]"""
                         "content": test_prompt
                     }
                 ],
-                "model": "grok-beta",
+                "model": "grok-3",
                 "stream": False,
                 "max_tokens": 50
             }
