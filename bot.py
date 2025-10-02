@@ -144,7 +144,7 @@ def format_memecoin_details(coin: Dict[str, Any]) -> str:
 
 
 def format_sentiment_result(sentiment: str, explanation: str, tweet_count: int, 
-                          sample_tweets: List[str], token_name: str, rating: int = 5) -> str:
+                          sample_tweets: List[str], token_name: str) -> str:
     """Format sentiment analysis result."""
     # Sentiment emoji
     sentiment_emoji = {
@@ -156,39 +156,15 @@ def format_sentiment_result(sentiment: str, explanation: str, tweet_count: int,
     emoji = sentiment_emoji.get(sentiment.lower(), "⚪")
     signal = sentiment.upper()
     
-    # Rating bar visualization
-    filled = "🟩" * rating
-    empty = "⬜" * (10 - rating)
-    rating_bar = filled + empty
-    
-    # Rating description
-    if rating >= 8:
-        rating_desc = "🔥 Extremely Bullish"
-    elif rating >= 7:
-        rating_desc = "💪 Very Bullish"
-    elif rating >= 6:
-        rating_desc = "📈 Bullish"
-    elif rating == 5:
-        rating_desc = "😐 Neutral"
-    elif rating >= 4:
-        rating_desc = "📉 Slightly Bearish"
-    elif rating >= 3:
-        rating_desc = "⚠️ Bearish"
-    else:
-        rating_desc = "🚨 Very Bearish"
-    
     result = f"""
 🧠 **Sentiment Analysis for {token_name}**
 
 {emoji} **Signal: {signal}**
 
-⭐ **Bullish Rating: {rating}/10** - {rating_desc}
-{rating_bar}
-
 💭 **Analysis:**
 {explanation}
 
-📊 **Based on {tweet_count} real-time tweets (last 48-72h)**
+📊 **Based on {tweet_count} real-time tweets (last 48h)**
 ⏰ **Analyzed:** {datetime.now().strftime('%H:%M UTC')}
 """
     
@@ -215,17 +191,6 @@ def is_valid_solana_address(address: str) -> bool:
     # Basic base58 character check
     base58_chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
     return all(c in base58_chars for c in address)
-
-
-def is_ticker_symbol(text: str) -> bool:
-    """Check if text looks like a ticker symbol."""
-    text = text.strip()
-    # Remove $ if present
-    if text.startswith('$'):
-        text = text[1:]
-    
-    # Ticker should be 2-10 characters, alphanumeric
-    return len(text) >= 2 and len(text) <= 10 and text.replace('_', '').isalnum()
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -376,12 +341,10 @@ async def show_sentiment_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 Analyze real-time Twitter sentiment for any Solana memecoin:
 
-🔍 **Analyze Token** - Enter contract address or ticker
+🔍 **Analyze Token** - Enter contract address
 ℹ️ **How it Works** - Learn about the analysis
 
-The bot uses Grok AI with web search to find recent tweets and determine if the community sentiment is bullish, bearish, or neutral.
-
-✨ **No expensive Twitter API needed!**
+The bot searches tweets from the last 48 hours and uses Grok AI to determine if the community sentiment is bullish, bearish, or neutral.
 """
     
     await edit_or_send_message(update, text, get_sentiment_menu_keyboard())
@@ -619,126 +582,53 @@ async def handle_sentiment_analyze(update: Update, context: ContextTypes.DEFAULT
     text = """
 🔍 **Sentiment Analysis**
 
-Enter a Solana token to analyze:
+Enter a Solana token contract address (CA) to analyze:
 
 The bot will:
-1. Search web for recent tweets about the token
-2. Analyze with Grok AI (web search + grok-2-latest)
-3. Provide bullish/bearish/neutral signal with 1-10 rating
-4. Give detailed reasoning based on actual tweets found
+1. Fetch 100+ live tweets from last 48h
+2. Analyze with Grok AI (no cached data)
+3. Provide real-time bullish/bearish/neutral signal
 
-**You can enter:**
-• Ticker symbol: `$WEED` or `BONK`
-• Contract address: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+**Example CA:**
+`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
 
-Enter ticker or contract address:
+Enter the contract address:
 """
     
     await edit_or_send_message(update, text, None)
 
 
-async def handle_ca_input(update: Update, context: ContextTypes.DEFAULT_TYPE, input_text: str) -> None:
-    """Handle contract address OR ticker symbol input for sentiment analysis."""
+async def handle_ca_input(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
+    """Handle contract address input for sentiment analysis."""
     user_id = update.effective_user.id
     set_user_state(user_id, BotState.NORMAL)
     
-    input_text = input_text.strip()
+    ca = ca.strip()
     
-    # Check if it's a ticker symbol (like $WEED or WEED)
-    if is_ticker_symbol(input_text):
-        # Remove $ if present
-        ticker = input_text.replace('$', '').upper()
-        
-        # Show searching message
-        searching_msg = await update.message.reply_text(
-            f"🔍 Searching for **{ticker}** on Solana...",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        try:
-            # Search DexScreener for this ticker
-            async with DexScreenerClient() as client:
-                results = await client.search_pairs(ticker, limit=5)
-            
-            if not results:
-                await searching_msg.edit_text(
-                    f"❌ **Ticker Not Found**\n\n"
-                    f"Could not find token **{ticker}** on Solana DEXs.\n\n"
-                    f"Try:\n"
-                    f"• Using the full contract address instead\n"
-                    f"• Checking the ticker spelling\n"
-                    f"• Using a more popular token",
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=get_sentiment_menu_keyboard()
-                )
-                return
-            
-            # Use the first (best) result
-            best_match = results[0]
-            ca = best_match.get('baseToken', {}).get('address', '')
-            token_name = best_match.get('baseToken', {}).get('symbol', ticker)
-            
-            if not ca or not is_valid_solana_address(ca):
-                await searching_msg.edit_text(
-                    f"❌ **Invalid Token Data**\n\n"
-                    f"Found **{ticker}** but couldn't extract contract address.\n\n"
-                    f"Please try using the contract address directly.",
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=get_sentiment_menu_keyboard()
-                )
-                return
-            
-            # Delete searching message and proceed
-            await searching_msg.delete()
-            
-            # Send confirmation and start analysis
-            await update.message.reply_text(
-                f"✅ Found **{token_name}** (${ticker})\n"
-                f"Contract: `{ca}`\n\n"
-                f"Starting sentiment analysis...",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            await analyze_token_sentiment(update, context, ca)
-            
-        except Exception as e:
-            logger.error(f"Error searching for ticker {ticker}: {e}")
-            await searching_msg.edit_text(
-                f"❌ **Search Error**\n\n"
-                f"Error searching for **{ticker}**.\n\n"
-                f"Please try again or use the contract address directly.",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=get_sentiment_menu_keyboard()
-            )
-        return
-    
-    # Otherwise treat as contract address
-    if not is_valid_solana_address(input_text):
+    if not is_valid_solana_address(ca):
         await update.message.reply_text(
-            "❌ Invalid input format.\n\n"
-            "Please enter either:\n"
-            "• A Solana contract address (44 characters)\n"
-            "• A ticker symbol (e.g., $WEED or BONK)\n\n"
-            "Try again:",
+            "❌ Invalid Solana contract address format.\n"
+            "Contract addresses should be 44 characters long.\n\n"
+            "Please try again:",
             reply_markup=get_sentiment_menu_keyboard()
         )
         return
     
-    await analyze_token_sentiment(update, context, input_text)
+    await analyze_token_sentiment(update, context, ca)
 
 
 async def analyze_token_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
-    """Analyze sentiment using Grok web search - NO Twitter API needed!"""
+    """Analyze sentiment for a token - ALWAYS uses fresh live data."""
     # Show loading message
     loading_text = f"""
 🧠 **Analyzing Sentiment**
 
 Contract Address: `{ca}`
 
-⏳ Searching web for tweets...
+⏳ Fetching live Twitter data...
 ⏳ Running AI sentiment analysis...
 
-This may take 30-90 seconds...
+This may take 30-60 seconds...
 """
     
     await edit_or_send_message(update, loading_text, None)
@@ -747,67 +637,79 @@ This may take 30-90 seconds...
         db = get_db_manager()
         
         # Get token info first
-        token_name = None
-        token_info = None
-        logger.info(f"Starting sentiment analysis for CA: {ca}")
+        token_name = "Unknown Token"
+        async with DexScreenerClient() as client:
+            token_info = await client.get_token_info(ca)
+            if token_info:
+                token_name = token_info.get('symbol', token_info.get('name', 'Unknown Token'))
+                # Cache token info only (not sentiment)
+                db.cache_memecoin(token_info)
         
-        # Try to get token info from cache or DexScreener
-        cached_coin = db.get_cached_memecoin(ca, max_age_minutes=30)
-        if cached_coin:
-            token_name = cached_coin.symbol or cached_coin.name
-            logger.info(f"Token identified from cache as: {token_name}")
-        else:
-            async with DexScreenerClient() as client:
-                token_info = await client.get_token_info(ca)
-                if token_info:
-                    token_name = token_info.get('symbol') or token_info.get('name')
-                    logger.info(f"Token identified from DexScreener as: {token_name}")
-                    # Cache token info only (not sentiment)
-                    db.cache_memecoin(token_info)
-                else:
-                    logger.warning(f"Could not fetch token info for CA: {ca}")
+        # ALWAYS fetch fresh tweets - NO CACHE
+        # Increase to 100 tweets for better analysis (user is willing to pay)
+        tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=100, days_back=2)
         
-        # If still no token name, use a shortened CA as identifier
-        if not token_name:
-            token_name = f"{ca[:4]}...{ca[-4:]}"
-            logger.warning(f"Using CA shorthand as token name: {token_name}")
-        
-        # Use Grok web search to find and analyze tweets
-        # This replaces expensive Twitter API!
-        logger.info(f"Calling Grok web search for {token_name}")
-        async with GrokClient(os.getenv("XAI_API_KEY")) as grok:
-            sentiment, explanation, tweet_count, rating = await grok.search_and_analyze_sentiment(ca, token_name)
-        
-        logger.info(f"Grok returned: sentiment={sentiment}, rating={rating}/10, tweets={tweet_count}")
-        
-        # Check if analysis was successful
-        if sentiment == "neutral" and ("error" in explanation.lower() or "unable" in explanation.lower()):
-            logger.warning(f"Analysis returned error-like response: {explanation}")
-            error_text = f"""
+        # If no tweets found, show error
+        if len(tweets) == 0:
+            rate_limit_text = f"""
 📊 **Sentiment Analysis - {token_name}**
 
-❌ **Analysis Issue**
+⏱️ **No Tweets Found**
 
-{explanation}
+Could not find any recent tweets for this token.
 
-Please try again in a few moments.
+This could mean:
+• Twitter API rate limit (wait 15 minutes)
+• Very new or low-activity token
+• Limited social media presence
+
+Please try again in a few minutes or try a different token.
 """
             keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
-            await edit_or_send_message(update, error_text, keyboard)
+            await edit_or_send_message(update, rate_limit_text, keyboard)
             return
         
-        # Format and send results
-        logger.info(f"Formatting results for display to user")
+        if len(tweets) < 5:
+            no_activity_text = f"""
+📊 **Sentiment Analysis - {token_name}**
+
+❌ **Insufficient Data**
+
+Found only {len(tweets)} recent tweets mentioning this token.
+
+Need at least 5 tweets for reliable sentiment analysis.
+
+This could mean:
+• New or low-activity token
+• Limited social media presence  
+• Recent contract address
+
+Try again later or check a more popular token.
+"""
+            
+            keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
+            await edit_or_send_message(update, no_activity_text, keyboard)
+            return
+        
+        # Prepare tweets for sentiment analysis (use more tweets for better accuracy)
+        tweets_text = twitter_client.prepare_tweets_for_sentiment(tweets)
+        
+        # Analyze sentiment with Grok using LIVE data
+        async with GrokClient(os.getenv("XAI_API_KEY")) as grok:
+            sentiment, explanation = await grok.analyze_sentiment(ca, token_name, tweets_text)
+        
+        tweet_count = len(tweets)
+        
+        # Format and send results - NO CACHING, always fresh data
         result_text = format_sentiment_result(
-            sentiment, explanation, tweet_count, [], token_name, rating
+            sentiment, explanation, tweet_count, [], token_name
         )
         
-        keyboard = get_sentiment_result_keyboard(ca, True)
+        keyboard = get_sentiment_result_keyboard(ca, True)  # Assume we have token data
         await edit_or_send_message(update, result_text, keyboard)
-        logger.info(f"Sentiment analysis completed successfully for {token_name}")
         
     except Exception as e:
-        logger.error(f"Error analyzing sentiment for {ca}: {e}", exc_info=True)
+        logger.error(f"Error analyzing sentiment for {ca}: {e}")
         error_text = f"""
 ❌ **Sentiment Analysis Failed**
 
@@ -816,9 +718,9 @@ Sorry, there was an error analyzing sentiment for this token:
 `{ca}`
 
 This could be due to:
+• Twitter API rate limits
 • Grok AI service issues
 • Network connectivity problems
-• Rate limits
 
 Please try again in a few minutes.
 """
@@ -883,13 +785,10 @@ You can create custom filters using natural language:
 📊 **Sentiment Analysis Help**
 
 **How It Works:**
-1. Enter ticker symbol ($WEED) or contract address
-2. Grok AI searches the web for recent Twitter/X mentions
-3. Analyzes 20-50+ tweets with grok-2-latest model
-4. Results show:
-   • Bullish/Bearish/Neutral signal
-   • 1-10 rating (10 = extremely bullish, 1 = extremely bearish)
-   • Detailed analysis with specific reasons from actual tweets
+1. Enter a Solana token contract address
+2. Bot searches real-time Twitter mentions (last 48 hours)
+3. Grok AI analyzes tweet sentiment
+4. Results show: Bullish, Bearish, or Neutral signal with explanation
 
 **What It Analyzes:**
 • Community excitement/fear
@@ -897,14 +796,14 @@ You can create custom filters using natural language:
 • Buying/selling sentiment
 • Overall market mood
 
-**Key Features:**
-• Uses Grok web search (no expensive Twitter API!)
+**Reliability:**
+• Uses 100+ live tweets for analysis
 • Always fetches fresh real-time data
 • No cached data - live analysis only
-• Scans recent tweets from Twitter
+• Recent tweets from last 48 hours
 
 **Limitations:**
-• Based on publicly available Twitter data
+• Based only on Twitter activity
 • Not financial advice
 • Sentiment can change quickly
 • Consider multiple sources
@@ -916,19 +815,19 @@ You can create custom filters using natural language:
         text = """
 🤖 **About Solana Memecoins Analyzer**
 
-**Version:** 2.0.0
+**Version:** 1.0.0
 **Developer:** Solana Memecoins Team
 
 **Features:**
 🔍 **Smart Filtering** - Find tokens by multiple criteria
-📊 **AI Sentiment** - Grok web search + analysis
+📊 **AI Sentiment** - Grok-powered Twitter analysis
 💧 **Live Data** - Real-time DexScreener integration
-⚡ **Cost Effective** - No expensive Twitter API!
+⚡ **Fast Results** - Cached data for speed
 
 **Data Sources:**
 • **DexScreener API** - Token prices, volume, liquidity
-• **Grok AI Web Search** - Real-time Twitter sentiment
-• **Grok-3 Model** - Advanced sentiment analysis
+• **Twitter API** - Social media mentions
+• **Grok AI** - Advanced sentiment analysis
 
 **Privacy:**
 • No personal data stored
@@ -1039,21 +938,22 @@ async def init_clients() -> bool:
     """Initialize API clients."""
     global dex_client, twitter_client, grok_client
     
-    # Twitter client is now optional (using Grok web search instead)
+    # Initialize Twitter client
     twitter_bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
     if twitter_bearer_token:
         twitter_client = TwitterClient(twitter_bearer_token)
-        logger.info("Twitter client initialized (optional)")
+        logger.info("Twitter client initialized")
     else:
-        logger.info("Twitter client not initialized - using Grok web search instead")
+        logger.warning("Twitter bearer token not found")
+        return False
     
     # Initialize Grok client (will be created per request due to async context manager)
     xai_api_key = os.getenv("XAI_API_KEY")
     if not xai_api_key:
-        logger.error("xAI API key not found - required for sentiment analysis")
+        logger.warning("xAI API key not found")
         return False
     
-    logger.info("All required clients initialized successfully")
+    logger.info("All clients initialized successfully")
     return True
 
 

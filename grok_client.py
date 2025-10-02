@@ -49,145 +49,9 @@ EXPLANATION: [Your 3-4 line explanation]"""
 
         return prompt
     
-    async def search_and_analyze_sentiment(self, ca: str, token_name: str) -> Tuple[str, str, int, int]:
-        """
-        Search web for tweets and analyze sentiment using Grok web search.
-        
-        Returns:
-            Tuple of (sentiment, explanation, tweet_count, rating)
-        """
-        if not self.session:
-            raise RuntimeError("Client session not initialized. Use async with.")
-        
-        # Improve search queries for better results
-        search_terms = []
-        if token_name and token_name != "Unknown Token":
-            search_terms.append(f'site:twitter.com "{token_name}" solana')
-            search_terms.append(f'site:twitter.com ${token_name}')
-            search_terms.append(f'site:x.com "{token_name}" crypto')
-        
-        # Always search by contract address too
-        search_terms.append(f'site:twitter.com {ca[:8]}')
-        search_terms.append(f'site:x.com solana {ca[:12]}')
-        
-        search_query_text = " OR ".join(search_terms)
-        
-        prompt = f"""URGENT: Search Twitter/X.com RIGHT NOW for live tweets about the Solana token "${token_name}" (Contract: {ca}).
-
-SEARCH INSTRUCTIONS - YOU MUST DO THIS:
-1. Perform web search using these queries:
-   {search_query_text}
-   
-2. Search both twitter.com AND x.com (Twitter's new domain)
-
-3. Look for tweets from the LAST 24-72 HOURS
-
-4. Try to find AT LEAST 20-30 tweets by:
-   - Searching the token ticker/name
-   - Searching by contract address: {ca[:12]}...
-   - Searching "solana {token_name}"
-   - Looking at crypto influencer tweets
-
-5. DO NOT use cached data - perform LIVE web search RIGHT NOW
-
-After finding and analyzing ACTUAL RECENT tweets (aim for 20+ tweets), provide a DETAILED analysis:
-
-Based on the LIVE tweets you find RIGHT NOW, respond in this EXACT format:
-
-SENTIMENT: [Bullish/Bearish/Neutral]
-RATING: [X/10] (1-10 scale where 10 is extremely bullish, 5 is neutral, 1 is extremely bearish)
-EXPLANATION: [Write a DETAILED 5-6 sentence analysis. Include:
-- What specific things people are saying in the tweets (quote sentiments)
-- Price predictions or discussions you found
-- Community mood and engagement level you observed
-- Any notable influencers or accounts discussing it
-- Why you gave this specific rating
-- What makes this token different from others based on the tweets]
-TWEET_COUNT: [Exact number of relevant tweets you analyzed]
-
-RATING SCALE GUIDE:
-10/10 = Extremely bullish: Massive hype, influencers shilling, "100x gem" talk, huge buying pressure
-9/10 = Very bullish: Strong positive sentiment, lots of accumulation talk, good news
-8/10 = Bullish: Mostly positive, some concerns but overall optimistic
-7/10 = Moderately bullish: More positive than negative, cautious optimism
-6/10 = Slightly bullish: Barely positive, mixed with some concerns
-5/10 = Neutral: Equal mix of positive/negative, or very low activity
-4/10 = Slightly bearish: Some concerns, people taking profits
-3/10 = Moderately bearish: More negative than positive, fear increasing
-2/10 = Bearish: Strong FUD, people selling, concerns about project
-1/10 = Extremely bearish: Major red flags, rug pull concerns, mass selling
-
-CRITICAL: Your explanation MUST be SPECIFIC to THIS token based on ACTUAL tweets you found. Don't write generic analysis - mention SPECIFIC things people are saying, SPECIFIC price levels discussed, SPECIFIC concerns or excitement. Each token should have a UNIQUE analysis based on real tweets."""
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a crypto sentiment analyst with LIVE web search access. You MUST perform comprehensive web searches on Twitter/X to find as many recent tweets as possible about the requested token. Search multiple times with different queries to gather 20-50+ tweets. Always use web search to find the latest information. Never use cached data or make assumptions. The quality of your analysis depends on finding enough tweets."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "model": "grok-2-latest",
-            "stream": False,
-            "temperature": 0.3,
-            "max_tokens": 1500,
-            "web_search": True
-        }
-        
-        try:
-            logger.info(f"Sending sentiment analysis request for {token_name}")
-            async with self.session.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=90)
-            ) as response:
-                
-                if response.status == 200:
-                    data = await response.json()
-                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                    
-                    logger.info(f"Grok response received, length: {len(content)}")
-                    logger.debug(f"Full response: {content[:500]}...")
-                    
-                    sentiment, explanation, tweet_count, rating = self._parse_sentiment_with_count(content)
-                    logger.info(f"Parsed sentiment: {sentiment}, rating: {rating}/10, tweets: {tweet_count}")
-                    
-                    return sentiment, explanation, tweet_count, rating
-                
-                elif response.status == 429:
-                    logger.warning("Grok API rate limit exceeded")
-                    return "neutral", "Rate limit exceeded - try again later", 0, 5
-                
-                elif response.status == 401:
-                    logger.error("Grok API unauthorized - check API key")
-                    return "neutral", "API authentication failed", 0, 5
-                
-                else:
-                    logger.error(f"Grok API error: {response.status}")
-                    error_text = await response.text()
-                    logger.error(f"Error details: {error_text}")
-                    return "neutral", "API error occurred", 0, 5
-                    
-        except asyncio.TimeoutError:
-            logger.error("Grok API request timeout after 90s")
-            return "neutral", "Request timeout - try again", 0, 5
-        
-        except Exception as e:
-            logger.error(f"Error calling Grok API: {e}", exc_info=True)
-            return "neutral", "Analysis unavailable due to technical error", 0, 5
-    
     async def analyze_sentiment(self, ca: str, token_name: str, tweets_text: str) -> Tuple[str, str]:
         """
-        Analyze sentiment of tweets (legacy method for compatibility).
+        Analyze sentiment of tweets about a memecoin.
         
         Returns:
             Tuple of (sentiment, explanation)
@@ -256,124 +120,6 @@ CRITICAL: Your explanation MUST be SPECIFIC to THIS token based on ACTUAL tweets
         except Exception as e:
             logger.error(f"Error calling Grok API: {e}")
             return "neutral", "Analysis unavailable due to technical error"
-    
-    def _parse_sentiment_with_count(self, content: str) -> Tuple[str, str, int, int]:
-        """Parse sentiment response with tweet count and rating - flexible parsing."""
-        import re
-        
-        sentiment = "neutral"
-        explanation = "Unable to determine sentiment from response"
-        tweet_count = 0
-        rating = 5  # Default neutral rating
-        
-        try:
-            logger.debug(f"Parsing content: {content[:200]}...")
-            
-            # Try structured format first
-            lines = content.strip().split('\n')
-            explanation_lines = []
-            found_sentiment = False
-            
-            for i, line in enumerate(lines):
-                line = line.strip()
-                
-                # Parse SENTIMENT line
-                if line.startswith("SENTIMENT:") or line.startswith("Sentiment:"):
-                    sentiment_raw = re.sub(r'^SENTIMENT:\s*', '', line, flags=re.IGNORECASE).strip().lower()
-                    if "bullish" in sentiment_raw:
-                        sentiment = "bullish"
-                        found_sentiment = True
-                    elif "bearish" in sentiment_raw:
-                        sentiment = "bearish"
-                        found_sentiment = True
-                    else:
-                        sentiment = "neutral"
-                        found_sentiment = True
-                    logger.debug(f"Found sentiment: {sentiment}")
-                
-                # Parse RATING line
-                elif line.startswith("RATING:") or line.startswith("Rating:"):
-                    rating_str = re.sub(r'^RATING:\s*', '', line, flags=re.IGNORECASE).strip()
-                    # Extract number before /10
-                    numbers = re.findall(r'(\d+)(?:/10)?', rating_str)
-                    if numbers:
-                        rating = int(numbers[0])
-                        rating = max(1, min(10, rating))  # Clamp between 1-10
-                        logger.debug(f"Found rating: {rating}/10")
-                
-                # Parse EXPLANATION line and following lines
-                elif line.startswith("EXPLANATION:") or line.startswith("Explanation:"):
-                    expl_text = re.sub(r'^EXPLANATION:\s*', '', line, flags=re.IGNORECASE).strip()
-                    if expl_text:
-                        explanation_lines.append(expl_text)
-                    
-                    # Get following lines until TWEET_COUNT
-                    for next_line in lines[i+1:]:
-                        next_line = next_line.strip()
-                        if next_line.startswith("TWEET_COUNT:") or next_line.startswith("Tweet"):
-                            break
-                        if next_line and not next_line.startswith("SENTIMENT"):
-                            explanation_lines.append(next_line)
-                
-                # Parse TWEET_COUNT line
-                elif line.startswith("TWEET_COUNT:") or line.startswith("Tweet Count:"):
-                    count_str = re.sub(r'^TWEET_COUNT:\s*', '', line, flags=re.IGNORECASE).strip()
-                    numbers = re.findall(r'\d+', count_str)
-                    if numbers:
-                        tweet_count = int(numbers[0])
-                        logger.debug(f"Found tweet count: {tweet_count}")
-            
-            # Build explanation from collected lines
-            if explanation_lines:
-                explanation = " ".join(explanation_lines).strip()
-            
-            # Fallback: parse unstructured content
-            if not found_sentiment or explanation == "Unable to determine sentiment from response":
-                content_lower = content.lower()
-                
-                # Try to find sentiment in free text
-                if "bullish" in content_lower and "bearish" not in content_lower:
-                    sentiment = "bullish"
-                elif "bearish" in content_lower and "bullish" not in content_lower:
-                    sentiment = "bearish"
-                elif "bullish" in content_lower and "bearish" in content_lower:
-                    sentiment = "neutral"
-                
-                # Extract meaningful sentences
-                sentences = [s.strip() for s in content.split('.') if s.strip()]
-                if sentences:
-                    # Take first 4-5 sentences as explanation
-                    explanation = '. '.join(sentences[:5]).strip()
-                    if not explanation.endswith('.'):
-                        explanation += '.'
-                    if len(explanation) > 400:
-                        explanation = explanation[:397] + "..."
-            
-            # Extract tweet count from anywhere in text if not found
-            if tweet_count == 0:
-                all_numbers = re.findall(r'\b(\d+)\s*tweets?\b', content.lower())
-                if all_numbers:
-                    tweet_count = int(all_numbers[0])
-                else:
-                    # Estimate based on content
-                    if "many" in content.lower() or "active" in content.lower():
-                        tweet_count = 20
-                    elif "few" in content.lower() or "limited" in content.lower():
-                        tweet_count = 5
-                    else:
-                        tweet_count = 12
-            
-            logger.info(f"Final parsed: sentiment={sentiment}, rating={rating}/10, tweet_count={tweet_count}, expl_len={len(explanation)}")
-        
-        except Exception as e:
-            logger.error(f"Error parsing sentiment response: {e}", exc_info=True)
-            logger.error(f"Raw content: {content}")
-            # Return what we have
-            if not explanation or explanation == "Unable to determine sentiment from response":
-                explanation = "Analysis completed but format unclear. Please try again."
-            tweet_count = max(tweet_count, 5)
-        
-        return sentiment, explanation, tweet_count, rating
     
     def _parse_sentiment_response(self, content: str) -> Tuple[str, str]:
         """Parse the sentiment analysis response from Grok."""
@@ -464,3 +210,42 @@ CRITICAL: Your explanation MUST be SPECIFIC to THIS token based on ACTUAL tweets
         except Exception as e:
             logger.error(f"Grok API test failed: {e}")
             return False
+
+
+async def test_grok_client():
+    """Test function for the Grok client."""
+    import os
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    api_key = os.getenv("XAI_API_KEY")
+    
+    if not api_key:
+        print("No xAI API key found in environment")
+        return
+    
+    async with GrokClient(api_key) as client:
+        # Test connection
+        if await client.test_connection():
+            print("✅ Grok API connection successful")
+        else:
+            print("❌ Grok API connection failed")
+            return
+        
+        # Test sentiment analysis
+        test_tweets = """Tweet 1: This token is going to the moon! 🚀
+Tweet 2: Just bought more, feeling bullish
+Tweet 3: Price is dumping hard, might sell"""
+        
+        sentiment, explanation = await client.analyze_sentiment(
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "TEST",
+            test_tweets
+        )
+        
+        print(f"Sentiment: {sentiment}")
+        print(f"Explanation: {explanation}")
+
+
+if __name__ == "__main__":
+    asyncio.run(test_grok_client())
