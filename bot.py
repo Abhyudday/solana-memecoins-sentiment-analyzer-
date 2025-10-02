@@ -164,8 +164,8 @@ def format_sentiment_result(sentiment: str, explanation: str, tweet_count: int,
 💭 **Analysis:**
 {explanation}
 
-📊 **Based on {tweet_count} real-time tweets (last 48h)**
-⏰ **Analyzed:** {datetime.now().strftime('%H:%M UTC')}
+📊 **Analyzed {tweet_count} real-time tweets**
+⏰ **Analysis time:** {datetime.now().strftime('%H:%M UTC')}
 """
     
     return result.strip()
@@ -344,7 +344,7 @@ Analyze real-time Twitter sentiment for any Solana memecoin:
 🔍 **Analyze Token** - Enter contract address
 ℹ️ **How it Works** - Learn about the analysis
 
-The bot searches tweets from the last 48 hours and uses Grok AI to determine if the community sentiment is bullish, bearish, or neutral.
+The bot searches Twitter using multiple query strategies to find 100+ relevant tweets, then uses Grok AI to determine if the community sentiment is bullish, bearish, or neutral.
 """
     
     await edit_or_send_message(update, text, get_sentiment_menu_keyboard())
@@ -585,9 +585,10 @@ async def handle_sentiment_analyze(update: Update, context: ContextTypes.DEFAULT
 Enter a Solana token contract address (CA) to analyze:
 
 The bot will:
-1. Fetch 100+ live tweets from last 48h
-2. Analyze with Grok AI (no cached data)
-3. Provide real-time bullish/bearish/neutral signal
+1. Search Twitter with multiple strategies to find 100+ relevant tweets
+2. Use fresh data only (no cache)
+3. Analyze with Grok-3 AI model
+4. Provide real-time bullish/bearish/neutral signal
 
 **Example CA:**
 `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
@@ -786,9 +787,10 @@ You can create custom filters using natural language:
 
 **How It Works:**
 1. Enter a Solana token contract address
-2. Bot searches real-time Twitter mentions (last 48 hours)
-3. Grok AI analyzes tweet sentiment
-4. Results show: Bullish, Bearish, or Neutral signal with explanation
+2. Bot searches Twitter using multiple query strategies
+3. Fetches 50-100+ tweets using smart fallback searches
+4. Grok-3 AI analyzes all tweets for sentiment
+5. Results show: Bullish, Bearish, or Neutral signal with explanation
 
 **What It Analyzes:**
 • Community excitement/fear
@@ -797,10 +799,11 @@ You can create custom filters using natural language:
 • Overall market mood
 
 **Reliability:**
-• Uses 100+ live tweets for analysis
-• Always fetches fresh real-time data
-• No cached data - live analysis only
-• Recent tweets from last 48 hours
+• Searches with multiple query strategies
+• Uses 50-100+ tweets per analysis
+• Always fetches fresh data (no cache)
+• Smart fallback if initial search returns few results
+• Extends time range automatically if needed
 
 **Limitations:**
 • Based only on Twitter activity

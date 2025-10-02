@@ -42,32 +42,35 @@ class TwitterClient:
             logger.error(f"Invalid Solana address: {ca}")
             return []
         
-        # Build search query - prioritize token name as tweets rarely include full CA
-        # Note: Avoid cashtag ($) operator as it's not available in basic Twitter API tiers
+        # Build search query - make it LESS restrictive to get more results
+        # Twitter users rarely include full CA or use exact formatting
         query_parts = []
         
-        # If we have a token name, prioritize it (most common in tweets)
+        # If we have a token name, use multiple variations
         if token_name and len(token_name) > 2:
-            token_name_clean = token_name.strip()
-            # Add token name - quoted for exact match and plain
-            query_parts.append(f'"{token_name_clean}"')
-            # Only add plain name if it's not too short/common
-            if len(token_name_clean) > 3:
-                query_parts.append(token_name_clean)
+            token_name_clean = token_name.strip().upper()
+            
+            # Try different formats people use on Twitter
+            # 1. With $ (cashtag)
+            query_parts.append(f'${token_name_clean}')
+            # 2. Plain name (most common)
+            query_parts.append(token_name_clean)
+            # 3. Lowercase variation
+            query_parts.append(token_name_clean.lower())
         else:
-            # No token name - search by CA
-            # Use partial CA strings which are more common in tweets
-            ca_start = ca[:12]
-            ca_end = ca[-12:]
+            # No token name - try partial CA (less common but try it)
+            ca_start = ca[:10]
+            ca_end = ca[-10:]
             query_parts.append(ca_start)
             query_parts.append(ca_end)
         
-        # Combine with OR and add context filters
-        # Keep query simple and under Twitter's limit
-        base_query = ' OR '.join(query_parts[:3])  # Limit to 3 parts max
-        query = f"({base_query}) (solana OR crypto) -is:retweet lang:en"
+        # Simple OR query - don't require "solana" or "crypto" as it's too restrictive
+        # Just filter out retweets and non-English
+        base_query = ' OR '.join(query_parts[:5])  # Use up to 5 variations
+        query = f"({base_query}) -is:retweet lang:en"
         
         logger.info(f"Twitter search query: {query}")
+        logger.info(f"Searching for token: {token_name}")
         
         # Calculate start time (days back)
         start_time = datetime.utcnow() - timedelta(days=days_back)
@@ -119,6 +122,101 @@ class TwitterClient:
                 tweet_data.append(tweet_info)
             
             logger.info(f"Found {len(tweet_data)} tweets for CA: {ca}")
+            
+            # If we didn't get many results, try a broader search
+            if len(tweet_data) < 10 and token_name and len(token_name) > 2:
+                logger.info(f"Only found {len(tweet_data)} tweets, trying broader search...")
+                try:
+                    # Try a simpler query with just the token name
+                    simple_query = f"{token_name.strip()} -is:retweet lang:en"
+                    logger.info(f"Fallback query: {simple_query}")
+                    
+                    fallback_tweets = tweepy.Paginator(
+                        self.client.search_recent_tweets,
+                        query=simple_query,
+                        max_results=100,
+                        start_time=start_time,
+                        tweet_fields=['created_at', 'author_id', 'public_metrics', 'context_annotations'],
+                        expansions=['author_id'],
+                        user_fields=['username', 'verified', 'public_metrics']
+                    ).flatten(limit=max_results)
+                    
+                    # Process fallback tweets
+                    for tweet in fallback_tweets:
+                        if not tweet or not tweet.text:
+                            continue
+                        
+                        tweet_id = tweet.id
+                        # Skip if we already have this tweet
+                        if any(t['id'] == tweet_id for t in tweet_data):
+                            continue
+                        
+                        author_info = {
+                            'id': tweet.author_id,
+                            'username': 'unknown',
+                            'verified': False
+                        }
+                        
+                        tweet_info = {
+                            'id': tweet.id,
+                            'text': self._clean_tweet_text(tweet.text),
+                            'created_at': tweet.created_at.isoformat() if tweet.created_at else None,
+                            'author': author_info,
+                            'metrics': {
+                                'retweet_count': tweet.public_metrics.get('retweet_count', 0) if tweet.public_metrics else 0,
+                                'like_count': tweet.public_metrics.get('like_count', 0) if tweet.public_metrics else 0,
+                                'reply_count': tweet.public_metrics.get('reply_count', 0) if tweet.public_metrics else 0,
+                            } if tweet.public_metrics else {},
+                            'url': f"https://twitter.com/user/status/{tweet.id}"
+                        }
+                        
+                        tweet_data.append(tweet_info)
+                    
+                    logger.info(f"After fallback search: {len(tweet_data)} total tweets")
+                except Exception as fallback_error:
+                    logger.warning(f"Fallback search failed: {fallback_error}")
+            
+            # If still not enough results, try extending time range to 7 days
+            if len(tweet_data) < 10 and token_name and days_back < 7:
+                logger.info(f"Still only {len(tweet_data)} tweets, extending search to 7 days...")
+                try:
+                    extended_start_time = datetime.utcnow() - timedelta(days=7)
+                    extended_query = f"{token_name.strip()} -is:retweet lang:en"
+                    
+                    extended_tweets = tweepy.Paginator(
+                        self.client.search_recent_tweets,
+                        query=extended_query,
+                        max_results=100,
+                        start_time=extended_start_time,
+                        tweet_fields=['created_at', 'author_id', 'public_metrics'],
+                    ).flatten(limit=max_results)
+                    
+                    for tweet in extended_tweets:
+                        if not tweet or not tweet.text:
+                            continue
+                        
+                        tweet_id = tweet.id
+                        if any(t['id'] == tweet_id for t in tweet_data):
+                            continue
+                        
+                        tweet_info = {
+                            'id': tweet.id,
+                            'text': self._clean_tweet_text(tweet.text),
+                            'created_at': tweet.created_at.isoformat() if tweet.created_at else None,
+                            'author': {'id': tweet.author_id, 'username': 'unknown', 'verified': False},
+                            'metrics': {
+                                'retweet_count': tweet.public_metrics.get('retweet_count', 0) if tweet.public_metrics else 0,
+                                'like_count': tweet.public_metrics.get('like_count', 0) if tweet.public_metrics else 0,
+                                'reply_count': tweet.public_metrics.get('reply_count', 0) if tweet.public_metrics else 0,
+                            } if tweet.public_metrics else {},
+                            'url': f"https://twitter.com/user/status/{tweet.id}"
+                        }
+                        tweet_data.append(tweet_info)
+                    
+                    logger.info(f"After extended search (7 days): {len(tweet_data)} total tweets")
+                except Exception as extended_error:
+                    logger.warning(f"Extended search failed: {extended_error}")
+            
             return tweet_data
             
         except tweepy.TooManyRequests:
