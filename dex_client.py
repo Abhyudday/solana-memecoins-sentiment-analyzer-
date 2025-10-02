@@ -110,48 +110,42 @@ class DexScreenerClient:
         
         return pairs[0] if pairs else None
     
-    async def get_trending_pairs(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get trending Solana pairs."""
-        # Use the boosted tokens endpoint which is more reliable
-        endpoint = "/token-boosts/top/v1"
+    async def get_trending_pairs(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Get comprehensive list of Solana pairs including trending and new."""
+        all_pairs = []
         
+        # Try boosted tokens first
         try:
+            endpoint = "/token-boosts/top/v1"
             data = await self._make_request(endpoint)
             boosted_tokens = data if isinstance(data, list) else []
             
-            # Get pair info for each boosted token
-            all_pairs = []
-            for token_data in boosted_tokens[:30]:  # Check top 30 boosted tokens
+            for token_data in boosted_tokens[:50]:
                 if token_data.get("chainId") == "solana":
                     token_address = token_data.get("tokenAddress")
                     if token_address:
                         pair_data = await self.get_pair_by_address(token_address)
                         if pair_data:
                             all_pairs.append(pair_data)
-                        
-                        # Add delay to avoid rate limiting
-                        await asyncio.sleep(0.3)
-                        
-                        if len(all_pairs) >= limit:
-                            break
-            
-            if all_pairs:
-                return all_pairs
+                        await asyncio.sleep(0.2)
         except Exception as e:
             logger.error(f"Error fetching boosted tokens: {e}")
         
-        # Fallback: search for popular Solana memecoins
-        logger.info("Using fallback search method")
-        search_terms = ["solana", "pump", "bonk", "dogwifhat", "pepe"]
-        all_pairs = []
+        # Comprehensive search with various terms to get more coverage
+        logger.info("Using comprehensive search method")
+        search_terms = [
+            "solana", "pump", "bonk", "dogwifhat", "pepe", "meme", "coin",
+            "inu", "shiba", "doge", "elon", "moon", "rocket", "chad", "wojak",
+            "token", "sol", "based", "trump", "biden", "cat", "dog", "frog"
+        ]
         
         for term in search_terms:
             try:
-                pairs = await self.search_pairs(term, limit=20)
-                # Filter for reasonable memecoin criteria
+                pairs = await self.search_pairs(term, limit=30)
                 for pair in pairs:
                     fdv = pair.get("fdv", 0)
                     volume_24h = pair.get("volume", {}).get("h24", 0) if pair.get("volume") else 0
+                    liquidity_usd = pair.get("liquidity", {}).get("usd", 0) if pair.get("liquidity") else 0
                     
                     base_token = pair.get("baseToken", {})
                     token_symbol = base_token.get("symbol", "").lower()
@@ -161,15 +155,12 @@ class DexScreenerClient:
                     if any(known == token_symbol for known in known_tokens):
                         continue
                     
-                    # More inclusive filter: 10K - 500M market cap, 100+ volume
-                    if (10_000 <= fdv <= 500_000_000 and volume_24h > 100):
+                    # Very inclusive filter: 1K - 1B market cap, some volume
+                    if (1_000 <= fdv <= 1_000_000_000 and volume_24h >= 0):
                         all_pairs.append(pair)
                 
-                # Add delay to avoid rate limiting
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
                 
-                if len(all_pairs) >= limit:
-                    break
             except Exception as e:
                 logger.error(f"Error searching pairs for term {term}: {e}")
                 continue
@@ -213,9 +204,9 @@ class DexScreenerClient:
         }
     
     async def search_memecoins(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Search for memecoins based on filters."""
-        # Get trending pairs as a starting point
-        pairs = await self.get_trending_pairs(100)
+        """Search for memecoins based on filters - returns ALL matching tokens."""
+        # Get comprehensive pairs
+        pairs = await self.get_trending_pairs(200)
         
         filtered_pairs = []
         for pair in pairs:
@@ -237,10 +228,19 @@ class DexScreenerClient:
             
             filtered_pairs.append(parsed_data)
         
-        # Sort by most active/latest - use volume and price change as indicators
-        # Higher volume and higher abs(price_change) = more recent activity
-        filtered_pairs.sort(key=lambda x: (x["volume_24h"] * (1 + abs(x["price_change_24h"])/100)), reverse=True)
-        return filtered_pairs[:20]  # Limit to top 20
+        # Sort by activity indicators (newest/most active first)
+        # Use multiple factors: volume, price change, liquidity
+        # Higher recent activity = likely newer or trending token
+        filtered_pairs.sort(
+            key=lambda x: (
+                x["volume_24h"] * (1 + abs(x["price_change_24h"])/100) * 
+                (1 if x["liquidity"] > 10000 else 0.5)
+            ), 
+            reverse=True
+        )
+        
+        # Return ALL matching tokens (not limited)
+        return filtered_pairs
     
     async def get_token_info(self, ca: str) -> Optional[Dict[str, Any]]:
         """Get token information by contract address."""

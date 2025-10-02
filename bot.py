@@ -70,14 +70,14 @@ def set_user_state(user_id: int, state: str, **kwargs):
     user_states[user_id] = {"state": state, **kwargs}
 
 
-def format_memecoin_list(memecoins: List[Dict[str, Any]]) -> str:
+def format_memecoin_list(memecoins: List[Dict[str, Any]], page_size: int = 15) -> str:
     """Format memecoin list for display."""
     if not memecoins:
         return "No memecoins found matching your criteria."
     
     lines = ["🚀 **Memecoin Results:**\n"]
     
-    for i, coin in enumerate(memecoins[:10], 1):  # Limit to 10 for display
+    for i, coin in enumerate(memecoins[:page_size], 1):
         name = coin.get('name', 'Unknown')
         symbol = coin.get('symbol', '???')
         mc = coin.get('mc', 0)
@@ -449,36 +449,10 @@ async def apply_memecoin_filter(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             filters = filter_input
         
-        # Check cache first
-        db = get_db_manager()
-        cached_results = db.get_cached_memecoins_by_filter(filters, max_age_minutes=5)
-        
-        if cached_results:
-            logger.info(f"Using cached results: {len(cached_results)} memecoins")
-            memecoins = [
-                {
-                    'ca': coin.ca,
-                    'name': coin.name,
-                    'symbol': coin.symbol,
-                    'mc': coin.mc,
-                    'volume_24h': coin.volume_24h,
-                    'liquidity': coin.liquidity,
-                    'holders_estimate': coin.holders_estimate,
-                    'price_usd': coin.price_usd,
-                    'price_change_24h': coin.price_change_24h,
-                    'dex_url': coin.dex_url
-                }
-                for coin in cached_results
-            ]
-        else:
-            # Fetch fresh data
-            logger.info("Fetching fresh memecoin data")
-            async with DexScreenerClient() as client:
-                memecoins = await client.search_memecoins(filters)
-                
-                # Cache the results
-                for coin in memecoins:
-                    db.cache_memecoin(coin)
+        # ALWAYS fetch fresh data - NO CACHE for filters
+        logger.info("Fetching fresh memecoin data")
+        async with DexScreenerClient() as client:
+            memecoins = await client.search_memecoins(filters)
         
         if not memecoins:
             no_results_text = f"""
@@ -493,7 +467,8 @@ Try adjusting your filters or use a preset filter.
             return
         
         # Format and display results
-        results_text = format_memecoin_list(memecoins)
+        page_size = 15
+        results_text = format_memecoin_list(memecoins, page_size)
         results_text += f"\n\n**Filter:** {format_filters_display(filters)}"
         results_text += f"\n**Found:** {len(memecoins)} tokens"
         
@@ -501,7 +476,7 @@ Try adjusting your filters or use a preset filter.
         user_id = update.effective_user.id
         set_user_state(user_id, BotState.NORMAL, last_results=memecoins, last_filters=filters)
         
-        keyboard = get_memecoin_results_keyboard(memecoins[:10])  # Show first 10
+        keyboard = get_memecoin_results_keyboard(memecoins[:page_size])
         await edit_or_send_message(update, results_text, keyboard)
         
     except Exception as e:
@@ -878,7 +853,7 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return
     
     # Calculate pagination
-    items_per_page = 10
+    items_per_page = 15
     start_idx = page * items_per_page
     end_idx = start_idx + items_per_page
     page_results = last_results[start_idx:end_idx]
@@ -892,7 +867,7 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return
     
     # Format results
-    results_text = format_memecoin_list(page_results)
+    results_text = format_memecoin_list(page_results, items_per_page)
     results_text += f"\n\n**Filter:** {format_filters_display(last_filters)}"
     results_text += f"\n**Page:** {page + 1} | **Total:** {len(last_results)} tokens"
     
