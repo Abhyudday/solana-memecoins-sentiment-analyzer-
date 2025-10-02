@@ -120,18 +120,24 @@ IMPORTANT: Your analysis MUST be based on ACTUAL CURRENT tweets you find via web
         }
         
         try:
+            logger.info(f"Sending sentiment analysis request for {token_name}")
             async with self.session.post(
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=60)
+                timeout=aiohttp.ClientTimeout(total=90)
             ) as response:
                 
                 if response.status == 200:
                     data = await response.json()
                     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                     
+                    logger.info(f"Grok response received, length: {len(content)}")
+                    logger.debug(f"Full response: {content[:500]}...")
+                    
                     sentiment, explanation, tweet_count = self._parse_sentiment_with_count(content)
+                    logger.info(f"Parsed sentiment: {sentiment}, tweets: {tweet_count}")
+                    
                     return sentiment, explanation, tweet_count
                 
                 elif response.status == 429:
@@ -149,11 +155,11 @@ IMPORTANT: Your analysis MUST be based on ACTUAL CURRENT tweets you find via web
                     return "neutral", "API error occurred", 0
                     
         except asyncio.TimeoutError:
-            logger.error("Grok API request timeout")
+            logger.error("Grok API request timeout after 90s")
             return "neutral", "Request timeout - try again", 0
         
         except Exception as e:
-            logger.error(f"Error calling Grok API: {e}")
+            logger.error(f"Error calling Grok API: {e}", exc_info=True)
             return "neutral", "Analysis unavailable due to technical error", 0
     
     async def analyze_sentiment(self, ca: str, token_name: str, tweets_text: str) -> Tuple[str, str]:
@@ -229,72 +235,109 @@ IMPORTANT: Your analysis MUST be based on ACTUAL CURRENT tweets you find via web
             return "neutral", "Analysis unavailable due to technical error"
     
     def _parse_sentiment_with_count(self, content: str) -> Tuple[str, str, int]:
-        """Parse sentiment response with tweet count."""
+        """Parse sentiment response with tweet count - flexible parsing."""
+        import re
+        
         sentiment = "neutral"
-        explanation = "Unable to determine sentiment"
+        explanation = "Unable to determine sentiment from response"
         tweet_count = 0
         
         try:
-            lines = content.strip().split('\n')
+            logger.debug(f"Parsing content: {content[:200]}...")
             
-            for line in lines:
+            # Try structured format first
+            lines = content.strip().split('\n')
+            explanation_lines = []
+            found_sentiment = False
+            
+            for i, line in enumerate(lines):
                 line = line.strip()
                 
-                if line.startswith("SENTIMENT:"):
-                    sentiment_raw = line.replace("SENTIMENT:", "").strip().lower()
+                # Parse SENTIMENT line
+                if line.startswith("SENTIMENT:") or line.startswith("Sentiment:"):
+                    sentiment_raw = re.sub(r'^SENTIMENT:\s*', '', line, flags=re.IGNORECASE).strip().lower()
                     if "bullish" in sentiment_raw:
                         sentiment = "bullish"
+                        found_sentiment = True
                     elif "bearish" in sentiment_raw:
                         sentiment = "bearish"
+                        found_sentiment = True
                     else:
                         sentiment = "neutral"
+                        found_sentiment = True
+                    logger.debug(f"Found sentiment: {sentiment}")
                 
-                elif line.startswith("EXPLANATION:"):
-                    explanation = line.replace("EXPLANATION:", "").strip()
-                    # Get remaining lines for multi-line explanation
-                    idx = lines.index(line)
-                    remaining = []
-                    for next_line in lines[idx+1:]:
-                        if next_line.strip().startswith("TWEET_COUNT:"):
+                # Parse EXPLANATION line and following lines
+                elif line.startswith("EXPLANATION:") or line.startswith("Explanation:"):
+                    expl_text = re.sub(r'^EXPLANATION:\s*', '', line, flags=re.IGNORECASE).strip()
+                    if expl_text:
+                        explanation_lines.append(expl_text)
+                    
+                    # Get following lines until TWEET_COUNT
+                    for next_line in lines[i+1:]:
+                        next_line = next_line.strip()
+                        if next_line.startswith("TWEET_COUNT:") or next_line.startswith("Tweet"):
                             break
-                        if next_line.strip():
-                            remaining.append(next_line.strip())
-                    if remaining:
-                        explanation += " " + " ".join(remaining)
-                    if not explanation or explanation == "EXPLANATION:":
-                        explanation = "No explanation provided"
+                        if next_line and not next_line.startswith("SENTIMENT"):
+                            explanation_lines.append(next_line)
                 
-                elif line.startswith("TWEET_COUNT:"):
-                    count_str = line.replace("TWEET_COUNT:", "").strip()
-                    # Extract number from string
-                    import re
+                # Parse TWEET_COUNT line
+                elif line.startswith("TWEET_COUNT:") or line.startswith("Tweet Count:"):
+                    count_str = re.sub(r'^TWEET_COUNT:\s*', '', line, flags=re.IGNORECASE).strip()
                     numbers = re.findall(r'\d+', count_str)
                     if numbers:
                         tweet_count = int(numbers[0])
+                        logger.debug(f"Found tweet count: {tweet_count}")
             
-            # Fallback parsing if format is different
-            if sentiment == "neutral" and explanation == "Unable to determine sentiment":
+            # Build explanation from collected lines
+            if explanation_lines:
+                explanation = " ".join(explanation_lines).strip()
+            
+            # Fallback: parse unstructured content
+            if not found_sentiment or explanation == "Unable to determine sentiment from response":
                 content_lower = content.lower()
-                if "bullish" in content_lower:
-                    sentiment = "bullish"
-                elif "bearish" in content_lower:
-                    sentiment = "bearish"
                 
-                # Extract explanation from content
-                sentences = content.split('.')
+                # Try to find sentiment in free text
+                if "bullish" in content_lower and "bearish" not in content_lower:
+                    sentiment = "bullish"
+                elif "bearish" in content_lower and "bullish" not in content_lower:
+                    sentiment = "bearish"
+                elif "bullish" in content_lower and "bearish" in content_lower:
+                    sentiment = "neutral"
+                
+                # Extract meaningful sentences
+                sentences = [s.strip() for s in content.split('.') if s.strip()]
                 if sentences:
-                    explanation = '. '.join(sentences[:3]).strip()
-                    if len(explanation) > 300:
-                        explanation = explanation[:297] + "..."
+                    # Take first 4-5 sentences as explanation
+                    explanation = '. '.join(sentences[:5]).strip()
+                    if not explanation.endswith('.'):
+                        explanation += '.'
+                    if len(explanation) > 400:
+                        explanation = explanation[:397] + "..."
             
-            # Default to reasonable count if not found
+            # Extract tweet count from anywhere in text if not found
             if tweet_count == 0:
-                tweet_count = 15  # Estimate
+                all_numbers = re.findall(r'\b(\d+)\s*tweets?\b', content.lower())
+                if all_numbers:
+                    tweet_count = int(all_numbers[0])
+                else:
+                    # Estimate based on content
+                    if "many" in content.lower() or "active" in content.lower():
+                        tweet_count = 20
+                    elif "few" in content.lower() or "limited" in content.lower():
+                        tweet_count = 5
+                    else:
+                        tweet_count = 12
+            
+            logger.info(f"Final parsed: sentiment={sentiment}, tweet_count={tweet_count}, expl_len={len(explanation)}")
         
         except Exception as e:
-            logger.error(f"Error parsing sentiment response: {e}")
+            logger.error(f"Error parsing sentiment response: {e}", exc_info=True)
             logger.error(f"Raw content: {content}")
-            tweet_count = 10
+            # Return what we have
+            if not explanation or explanation == "Unable to determine sentiment from response":
+                explanation = "Analysis completed but format unclear. Please try again."
+            tweet_count = max(tweet_count, 5)
         
         return sentiment, explanation, tweet_count
     

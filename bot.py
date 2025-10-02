@@ -713,7 +713,7 @@ Contract Address: `{ca}`
 ⏳ Searching web for tweets...
 ⏳ Running AI sentiment analysis...
 
-This may take 30-60 seconds...
+This may take 30-90 seconds...
 """
     
     await edit_or_send_message(update, loading_text, None)
@@ -723,20 +723,29 @@ This may take 30-60 seconds...
         
         # Get token info first
         token_name = "Unknown Token"
+        logger.info(f"Starting sentiment analysis for CA: {ca}")
+        
         async with DexScreenerClient() as client:
             token_info = await client.get_token_info(ca)
             if token_info:
                 token_name = token_info.get('symbol', token_info.get('name', 'Unknown Token'))
+                logger.info(f"Token identified as: {token_name}")
                 # Cache token info only (not sentiment)
                 db.cache_memecoin(token_info)
+            else:
+                logger.warning(f"Could not fetch token info for CA: {ca}")
         
         # Use Grok web search to find and analyze tweets
         # This replaces expensive Twitter API!
+        logger.info(f"Calling Grok web search for {token_name}")
         async with GrokClient(os.getenv("XAI_API_KEY")) as grok:
             sentiment, explanation, tweet_count = await grok.search_and_analyze_sentiment(ca, token_name)
         
+        logger.info(f"Grok returned: sentiment={sentiment}, tweets={tweet_count}")
+        
         # Check if analysis was successful
-        if sentiment == "neutral" and "error" in explanation.lower():
+        if sentiment == "neutral" and ("error" in explanation.lower() or "unable" in explanation.lower()):
+            logger.warning(f"Analysis returned error-like response: {explanation}")
             error_text = f"""
 📊 **Sentiment Analysis - {token_name}**
 
@@ -751,15 +760,17 @@ Please try again in a few moments.
             return
         
         # Format and send results
+        logger.info(f"Formatting results for display to user")
         result_text = format_sentiment_result(
             sentiment, explanation, tweet_count, [], token_name
         )
         
         keyboard = get_sentiment_result_keyboard(ca, True)
         await edit_or_send_message(update, result_text, keyboard)
+        logger.info(f"Sentiment analysis completed successfully for {token_name}")
         
     except Exception as e:
-        logger.error(f"Error analyzing sentiment for {ca}: {e}")
+        logger.error(f"Error analyzing sentiment for {ca}: {e}", exc_info=True)
         error_text = f"""
 ❌ **Sentiment Analysis Failed**
 
