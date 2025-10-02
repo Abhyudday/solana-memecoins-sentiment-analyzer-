@@ -59,15 +59,38 @@ EXPLANATION: [Your 3-4 line explanation]"""
         if not self.session:
             raise RuntimeError("Client session not initialized. Use async with.")
         
-        prompt = f"""You MUST search Twitter RIGHT NOW for live tweets about the Solana token "${token_name}" (contract: {ca[:15]}...).
+        # Improve search queries for better results
+        search_terms = []
+        if token_name and token_name != "Unknown Token":
+            search_terms.append(f'site:twitter.com "{token_name}" solana')
+            search_terms.append(f'site:twitter.com ${token_name}')
+            search_terms.append(f'site:x.com "{token_name}" crypto')
+        
+        # Always search by contract address too
+        search_terms.append(f'site:twitter.com {ca[:8]}')
+        search_terms.append(f'site:x.com solana {ca[:12]}')
+        
+        search_query_text = " OR ".join(search_terms)
+        
+        prompt = f"""URGENT: Search Twitter/X.com RIGHT NOW for live tweets about the Solana token "${token_name}" (Contract: {ca}).
 
-CRITICAL INSTRUCTIONS:
-1. Use web search to find REAL CURRENT tweets from Twitter about this token
-2. Search for: "twitter.com {token_name} solana", "twitter.com ${token_name}", "{token_name} crypto"
-3. Look for tweets from the LAST 24-48 HOURS ONLY
-4. DO NOT use cached data - search live Twitter RIGHT NOW
+SEARCH INSTRUCTIONS - YOU MUST DO THIS:
+1. Perform web search using these queries:
+   {search_query_text}
+   
+2. Search both twitter.com AND x.com (Twitter's new domain)
 
-After finding and analyzing ACTUAL RECENT tweets, determine the sentiment:
+3. Look for tweets from the LAST 24-72 HOURS
+
+4. Try to find AT LEAST 20-30 tweets by:
+   - Searching the token ticker/name
+   - Searching by contract address: {ca[:12]}...
+   - Searching "solana {token_name}"
+   - Looking at crypto influencer tweets
+
+5. DO NOT use cached data - perform LIVE web search RIGHT NOW
+
+After finding and analyzing ACTUAL RECENT tweets (aim for 20+ tweets), determine the sentiment:
 
 BULLISH signals:
 - People talking about buying, accumulating, holding
@@ -91,10 +114,15 @@ NEUTRAL signals:
 Based on the LIVE tweets you find RIGHT NOW, respond in this EXACT format:
 
 SENTIMENT: [Bullish/Bearish/Neutral]
-EXPLANATION: [Write 3-4 sentences explaining what you found in the actual live tweets - mention specific sentiment patterns, price discussions, community mood, and activity level]
-TWEET_COUNT: [Number of relevant tweets you analyzed]
+EXPLANATION: [Write 3-4 sentences explaining what you found in the actual live tweets - mention specific sentiment patterns, price discussions, community mood, and activity level. Be specific about what people are saying.]
+TWEET_COUNT: [Number of relevant tweets you analyzed - aim for 20+]
 
-IMPORTANT: Your analysis MUST be based on ACTUAL CURRENT tweets you find via web search, not assumptions or old data."""
+CRITICAL REQUIREMENTS:
+1. You MUST find at least 15-20 tweets to give accurate analysis
+2. If you find fewer than 10 tweets, search again with different queries
+3. Your analysis MUST be based on ACTUAL CURRENT tweets you find via web search
+4. DO NOT make assumptions - only report what you actually find in tweets
+5. Include the real tweet count you analyzed"""
         
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -105,7 +133,7 @@ IMPORTANT: Your analysis MUST be based on ACTUAL CURRENT tweets you find via web
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a crypto sentiment analyst with LIVE web search access. You MUST search Twitter in real-time for current tweets and analyze actual recent discussions. Always use web search to find the latest information. Never use cached data or make assumptions."
+                    "content": "You are a crypto sentiment analyst with LIVE web search access. You MUST perform comprehensive web searches on Twitter/X to find as many recent tweets as possible about the requested token. Search multiple times with different queries to gather 20-50+ tweets. Always use web search to find the latest information. Never use cached data or make assumptions. The quality of your analysis depends on finding enough tweets."
                 },
                 {
                     "role": "user",
@@ -114,8 +142,8 @@ IMPORTANT: Your analysis MUST be based on ACTUAL CURRENT tweets you find via web
             ],
             "model": "grok-2-latest",
             "stream": False,
-            "temperature": 0.4,
-            "max_tokens": 1200,
+            "temperature": 0.3,
+            "max_tokens": 1500,
             "web_search": True
         }
         

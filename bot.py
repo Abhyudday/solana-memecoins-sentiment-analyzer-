@@ -722,18 +722,30 @@ This may take 30-90 seconds...
         db = get_db_manager()
         
         # Get token info first
-        token_name = "Unknown Token"
+        token_name = None
+        token_info = None
         logger.info(f"Starting sentiment analysis for CA: {ca}")
         
-        async with DexScreenerClient() as client:
-            token_info = await client.get_token_info(ca)
-            if token_info:
-                token_name = token_info.get('symbol', token_info.get('name', 'Unknown Token'))
-                logger.info(f"Token identified as: {token_name}")
-                # Cache token info only (not sentiment)
-                db.cache_memecoin(token_info)
-            else:
-                logger.warning(f"Could not fetch token info for CA: {ca}")
+        # Try to get token info from cache or DexScreener
+        cached_coin = db.get_cached_memecoin(ca, max_age_minutes=30)
+        if cached_coin:
+            token_name = cached_coin.symbol or cached_coin.name
+            logger.info(f"Token identified from cache as: {token_name}")
+        else:
+            async with DexScreenerClient() as client:
+                token_info = await client.get_token_info(ca)
+                if token_info:
+                    token_name = token_info.get('symbol') or token_info.get('name')
+                    logger.info(f"Token identified from DexScreener as: {token_name}")
+                    # Cache token info only (not sentiment)
+                    db.cache_memecoin(token_info)
+                else:
+                    logger.warning(f"Could not fetch token info for CA: {ca}")
+        
+        # If still no token name, use a shortened CA as identifier
+        if not token_name:
+            token_name = f"{ca[:4]}...{ca[-4:]}"
+            logger.warning(f"Using CA shorthand as token name: {token_name}")
         
         # Use Grok web search to find and analyze tweets
         # This replaces expensive Twitter API!
