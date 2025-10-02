@@ -112,7 +112,7 @@ IMPORTANT: Your analysis MUST be based on ACTUAL CURRENT tweets you find via web
                     "content": prompt
                 }
             ],
-            "model": "grok-beta",
+            "model": "grok-2-latest",
             "stream": False,
             "temperature": 0.4,
             "max_tokens": 1200,
