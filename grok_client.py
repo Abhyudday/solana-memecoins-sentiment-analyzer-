@@ -49,12 +49,12 @@ EXPLANATION: [Your 3-4 line explanation]"""
 
         return prompt
     
-    async def search_and_analyze_sentiment(self, ca: str, token_name: str) -> Tuple[str, str, int]:
+    async def search_and_analyze_sentiment(self, ca: str, token_name: str) -> Tuple[str, str, int, int]:
         """
         Search web for tweets and analyze sentiment using Grok web search.
         
         Returns:
-            Tuple of (sentiment, explanation, tweet_count)
+            Tuple of (sentiment, explanation, tweet_count, rating)
         """
         if not self.session:
             raise RuntimeError("Client session not initialized. Use async with.")
@@ -90,39 +90,34 @@ SEARCH INSTRUCTIONS - YOU MUST DO THIS:
 
 5. DO NOT use cached data - perform LIVE web search RIGHT NOW
 
-After finding and analyzing ACTUAL RECENT tweets (aim for 20+ tweets), determine the sentiment:
-
-BULLISH signals:
-- People talking about buying, accumulating, holding
-- Moon/rocket emojis and positive price predictions
-- Excitement about partnerships, listings, or news
-- "This will 10x", "undervalued", "gem" type comments
-- High engagement and growing community buzz
-
-BEARISH signals:
-- People selling, worried about dumps
-- FUD, scam accusations, rug pull concerns
-- Price crash discussions, loss posts
-- Low volume complaints, dead project comments
-- Negative sentiment and fear
-
-NEUTRAL signals:
-- Mixed opinions, some bullish some bearish
-- Low activity or very few tweets
-- Just informational posts with no clear sentiment
+After finding and analyzing ACTUAL RECENT tweets (aim for 20+ tweets), provide a DETAILED analysis:
 
 Based on the LIVE tweets you find RIGHT NOW, respond in this EXACT format:
 
 SENTIMENT: [Bullish/Bearish/Neutral]
-EXPLANATION: [Write 3-4 sentences explaining what you found in the actual live tweets - mention specific sentiment patterns, price discussions, community mood, and activity level. Be specific about what people are saying.]
-TWEET_COUNT: [Number of relevant tweets you analyzed - aim for 20+]
+RATING: [X/10] (1-10 scale where 10 is extremely bullish, 5 is neutral, 1 is extremely bearish)
+EXPLANATION: [Write a DETAILED 5-6 sentence analysis. Include:
+- What specific things people are saying in the tweets (quote sentiments)
+- Price predictions or discussions you found
+- Community mood and engagement level you observed
+- Any notable influencers or accounts discussing it
+- Why you gave this specific rating
+- What makes this token different from others based on the tweets]
+TWEET_COUNT: [Exact number of relevant tweets you analyzed]
 
-CRITICAL REQUIREMENTS:
-1. You MUST find at least 15-20 tweets to give accurate analysis
-2. If you find fewer than 10 tweets, search again with different queries
-3. Your analysis MUST be based on ACTUAL CURRENT tweets you find via web search
-4. DO NOT make assumptions - only report what you actually find in tweets
-5. Include the real tweet count you analyzed"""
+RATING SCALE GUIDE:
+10/10 = Extremely bullish: Massive hype, influencers shilling, "100x gem" talk, huge buying pressure
+9/10 = Very bullish: Strong positive sentiment, lots of accumulation talk, good news
+8/10 = Bullish: Mostly positive, some concerns but overall optimistic
+7/10 = Moderately bullish: More positive than negative, cautious optimism
+6/10 = Slightly bullish: Barely positive, mixed with some concerns
+5/10 = Neutral: Equal mix of positive/negative, or very low activity
+4/10 = Slightly bearish: Some concerns, people taking profits
+3/10 = Moderately bearish: More negative than positive, fear increasing
+2/10 = Bearish: Strong FUD, people selling, concerns about project
+1/10 = Extremely bearish: Major red flags, rug pull concerns, mass selling
+
+CRITICAL: Your explanation MUST be SPECIFIC to THIS token based on ACTUAL tweets you found. Don't write generic analysis - mention SPECIFIC things people are saying, SPECIFIC price levels discussed, SPECIFIC concerns or excitement. Each token should have a UNIQUE analysis based on real tweets.
         
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -163,32 +158,32 @@ CRITICAL REQUIREMENTS:
                     logger.info(f"Grok response received, length: {len(content)}")
                     logger.debug(f"Full response: {content[:500]}...")
                     
-                    sentiment, explanation, tweet_count = self._parse_sentiment_with_count(content)
-                    logger.info(f"Parsed sentiment: {sentiment}, tweets: {tweet_count}")
+                    sentiment, explanation, tweet_count, rating = self._parse_sentiment_with_count(content)
+                    logger.info(f"Parsed sentiment: {sentiment}, rating: {rating}/10, tweets: {tweet_count}")
                     
-                    return sentiment, explanation, tweet_count
+                    return sentiment, explanation, tweet_count, rating
                 
                 elif response.status == 429:
                     logger.warning("Grok API rate limit exceeded")
-                    return "neutral", "Rate limit exceeded - try again later", 0
+                    return "neutral", "Rate limit exceeded - try again later", 0, 5
                 
                 elif response.status == 401:
                     logger.error("Grok API unauthorized - check API key")
-                    return "neutral", "API authentication failed", 0
+                    return "neutral", "API authentication failed", 0, 5
                 
                 else:
                     logger.error(f"Grok API error: {response.status}")
                     error_text = await response.text()
                     logger.error(f"Error details: {error_text}")
-                    return "neutral", "API error occurred", 0
+                    return "neutral", "API error occurred", 0, 5
                     
         except asyncio.TimeoutError:
             logger.error("Grok API request timeout after 90s")
-            return "neutral", "Request timeout - try again", 0
+            return "neutral", "Request timeout - try again", 0, 5
         
         except Exception as e:
             logger.error(f"Error calling Grok API: {e}", exc_info=True)
-            return "neutral", "Analysis unavailable due to technical error", 0
+            return "neutral", "Analysis unavailable due to technical error", 0, 5
     
     async def analyze_sentiment(self, ca: str, token_name: str, tweets_text: str) -> Tuple[str, str]:
         """
@@ -262,13 +257,14 @@ CRITICAL REQUIREMENTS:
             logger.error(f"Error calling Grok API: {e}")
             return "neutral", "Analysis unavailable due to technical error"
     
-    def _parse_sentiment_with_count(self, content: str) -> Tuple[str, str, int]:
-        """Parse sentiment response with tweet count - flexible parsing."""
+    def _parse_sentiment_with_count(self, content: str) -> Tuple[str, str, int, int]:
+        """Parse sentiment response with tweet count and rating - flexible parsing."""
         import re
         
         sentiment = "neutral"
         explanation = "Unable to determine sentiment from response"
         tweet_count = 0
+        rating = 5  # Default neutral rating
         
         try:
             logger.debug(f"Parsing content: {content[:200]}...")
@@ -294,6 +290,16 @@ CRITICAL REQUIREMENTS:
                         sentiment = "neutral"
                         found_sentiment = True
                     logger.debug(f"Found sentiment: {sentiment}")
+                
+                # Parse RATING line
+                elif line.startswith("RATING:") or line.startswith("Rating:"):
+                    rating_str = re.sub(r'^RATING:\s*', '', line, flags=re.IGNORECASE).strip()
+                    # Extract number before /10
+                    numbers = re.findall(r'(\d+)(?:/10)?', rating_str)
+                    if numbers:
+                        rating = int(numbers[0])
+                        rating = max(1, min(10, rating))  # Clamp between 1-10
+                        logger.debug(f"Found rating: {rating}/10")
                 
                 # Parse EXPLANATION line and following lines
                 elif line.startswith("EXPLANATION:") or line.startswith("Explanation:"):
@@ -357,7 +363,7 @@ CRITICAL REQUIREMENTS:
                     else:
                         tweet_count = 12
             
-            logger.info(f"Final parsed: sentiment={sentiment}, tweet_count={tweet_count}, expl_len={len(explanation)}")
+            logger.info(f"Final parsed: sentiment={sentiment}, rating={rating}/10, tweet_count={tweet_count}, expl_len={len(explanation)}")
         
         except Exception as e:
             logger.error(f"Error parsing sentiment response: {e}", exc_info=True)
@@ -367,7 +373,7 @@ CRITICAL REQUIREMENTS:
                 explanation = "Analysis completed but format unclear. Please try again."
             tweet_count = max(tweet_count, 5)
         
-        return sentiment, explanation, tweet_count
+        return sentiment, explanation, tweet_count, rating
     
     def _parse_sentiment_response(self, content: str) -> Tuple[str, str]:
         """Parse the sentiment analysis response from Grok."""

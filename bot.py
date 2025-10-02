@@ -144,7 +144,7 @@ def format_memecoin_details(coin: Dict[str, Any]) -> str:
 
 
 def format_sentiment_result(sentiment: str, explanation: str, tweet_count: int, 
-                          sample_tweets: List[str], token_name: str) -> str:
+                          sample_tweets: List[str], token_name: str, rating: int = 5) -> str:
     """Format sentiment analysis result."""
     # Sentiment emoji
     sentiment_emoji = {
@@ -156,15 +156,39 @@ def format_sentiment_result(sentiment: str, explanation: str, tweet_count: int,
     emoji = sentiment_emoji.get(sentiment.lower(), "⚪")
     signal = sentiment.upper()
     
+    # Rating bar visualization
+    filled = "🟩" * rating
+    empty = "⬜" * (10 - rating)
+    rating_bar = filled + empty
+    
+    # Rating description
+    if rating >= 8:
+        rating_desc = "🔥 Extremely Bullish"
+    elif rating >= 7:
+        rating_desc = "💪 Very Bullish"
+    elif rating >= 6:
+        rating_desc = "📈 Bullish"
+    elif rating == 5:
+        rating_desc = "😐 Neutral"
+    elif rating >= 4:
+        rating_desc = "📉 Slightly Bearish"
+    elif rating >= 3:
+        rating_desc = "⚠️ Bearish"
+    else:
+        rating_desc = "🚨 Very Bearish"
+    
     result = f"""
 🧠 **Sentiment Analysis for {token_name}**
 
 {emoji} **Signal: {signal}**
 
+⭐ **Bullish Rating: {rating}/10** - {rating_desc}
+{rating_bar}
+
 💭 **Analysis:**
 {explanation}
 
-📊 **Based on {tweet_count} real-time tweets (last 48h)**
+📊 **Based on {tweet_count} real-time tweets (last 48-72h)**
 ⏰ **Analyzed:** {datetime.now().strftime('%H:%M UTC')}
 """
     
@@ -599,8 +623,9 @@ Enter a Solana token to analyze:
 
 The bot will:
 1. Search web for recent tweets about the token
-2. Analyze with Grok AI (web search + grok-3)
-3. Provide real-time bullish/bearish/neutral signal
+2. Analyze with Grok AI (web search + grok-2-latest)
+3. Provide bullish/bearish/neutral signal with 1-10 rating
+4. Give detailed reasoning based on actual tweets found
 
 **You can enter:**
 • Ticker symbol: `$WEED` or `BONK`
@@ -751,9 +776,9 @@ This may take 30-90 seconds...
         # This replaces expensive Twitter API!
         logger.info(f"Calling Grok web search for {token_name}")
         async with GrokClient(os.getenv("XAI_API_KEY")) as grok:
-            sentiment, explanation, tweet_count = await grok.search_and_analyze_sentiment(ca, token_name)
+            sentiment, explanation, tweet_count, rating = await grok.search_and_analyze_sentiment(ca, token_name)
         
-        logger.info(f"Grok returned: sentiment={sentiment}, tweets={tweet_count}")
+        logger.info(f"Grok returned: sentiment={sentiment}, rating={rating}/10, tweets={tweet_count}")
         
         # Check if analysis was successful
         if sentiment == "neutral" and ("error" in explanation.lower() or "unable" in explanation.lower()):
@@ -774,7 +799,7 @@ Please try again in a few moments.
         # Format and send results
         logger.info(f"Formatting results for display to user")
         result_text = format_sentiment_result(
-            sentiment, explanation, tweet_count, [], token_name
+            sentiment, explanation, tweet_count, [], token_name, rating
         )
         
         keyboard = get_sentiment_result_keyboard(ca, True)
@@ -859,9 +884,12 @@ You can create custom filters using natural language:
 
 **How It Works:**
 1. Enter ticker symbol ($WEED) or contract address
-2. Grok AI searches the web for recent Twitter mentions
-3. Analyzes community sentiment with grok-3 model
-4. Results show: Bullish, Bearish, or Neutral signal with explanation
+2. Grok AI searches the web for recent Twitter/X mentions
+3. Analyzes 20-50+ tweets with grok-2-latest model
+4. Results show:
+   • Bullish/Bearish/Neutral signal
+   • 1-10 rating (10 = extremely bullish, 1 = extremely bearish)
+   • Detailed analysis with specific reasons from actual tweets
 
 **What It Analyzes:**
 • Community excitement/fear
