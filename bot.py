@@ -156,8 +156,14 @@ def format_sentiment_result(sentiment: str, explanation: str, tweet_count: int,
     emoji = sentiment_emoji.get(sentiment.lower(), "⚪")
     signal = sentiment.upper()
     
+    # If token_name looks like a CA (44 chars), format it differently
+    if len(token_name) == 44:
+        title = "🧠 **Sentiment Analysis**\n📋 `{}`".format(token_name)
+    else:
+        title = f"🧠 **Sentiment Analysis for {token_name}**"
+    
     result = f"""
-🧠 **Sentiment Analysis for {token_name}**
+{title}
 
 {emoji} **Signal: {signal}**
 
@@ -638,13 +644,19 @@ This may take 30-60 seconds...
         db = get_db_manager()
         
         # Get token info first
-        token_name = "Unknown Token"
+        token_name = None
+        token_info = None
         async with DexScreenerClient() as client:
             token_info = await client.get_token_info(ca)
             if token_info:
-                token_name = token_info.get('symbol', token_info.get('name', 'Unknown Token'))
+                token_name = token_info.get('symbol') or token_info.get('name')
                 # Cache token info only (not sentiment)
                 db.cache_memecoin(token_info)
+        
+        # If no token name found, use CA for search
+        if not token_name:
+            token_name = ca  # Use full CA as search term
+            logger.info(f"No token name found for {ca}, using CA for search")
         
         # ALWAYS fetch fresh tweets - NO CACHE
         # Increase to 100 tweets for better analysis (user is willing to pay)

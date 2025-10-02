@@ -47,22 +47,25 @@ class TwitterClient:
         query_parts = []
         
         # If we have a token name, use multiple variations
-        if token_name and len(token_name) > 2:
-            token_name_clean = token_name.strip().upper()
+        if token_name and len(token_name) > 2 and token_name != "Unknown Token":
+            token_name_clean = token_name.strip()
             
             # Try different formats people use on Twitter
-            # 1. With $ (cashtag)
-            query_parts.append(f'${token_name_clean}')
-            # 2. Plain name (most common)
-            query_parts.append(token_name_clean)
-            # 3. Lowercase variation
+            # Note: Removed $ cashtag operator - not available in Basic/Essential tier
+            query_parts.append(token_name_clean.upper())
             query_parts.append(token_name_clean.lower())
+            query_parts.append(token_name_clean)
+            # Add CA for better matching
+            query_parts.append(ca[:8])
         else:
-            # No token name - try partial CA (less common but try it)
+            # No valid token name - search using CA segments
             ca_start = ca[:10]
+            ca_mid = ca[10:20]
             ca_end = ca[-10:]
             query_parts.append(ca_start)
+            query_parts.append(ca_mid)
             query_parts.append(ca_end)
+            query_parts.append(ca)  # Full CA as fallback
         
         # Simple OR query - don't require "solana" or "crypto" as it's too restrictive
         # Just filter out retweets and non-English
