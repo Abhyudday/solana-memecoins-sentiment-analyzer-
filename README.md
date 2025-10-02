@@ -10,9 +10,10 @@ A comprehensive Telegram bot for tracking and analyzing Solana memecoins with AI
 - Custom filter creation with natural language
 
 📊 **AI-Powered Sentiment Analysis**
-- Real-time Twitter sentiment analysis using Grok AI
+- Real-time Twitter sentiment using Grok web search
+- No expensive Twitter API needed!
 - Bullish/Bearish/Neutral sentiment detection
-- Sample tweets display
+- Powered by Grok-3 model
 
 💧 **Live Data Integration**
 - Real-time data from DexScreener API
@@ -30,33 +31,29 @@ A comprehensive Telegram bot for tracking and analyzing Solana memecoins with AI
 - **python-telegram-bot** (v20+) - Async Telegram bot framework
 - **SQLAlchemy + PostgreSQL** - Database and caching
 - **DexScreener API** - Solana token data
-- **Twitter API v2** (via tweepy) - Social media data
-- **xAI Grok API** - AI sentiment analysis
+- **xAI Grok API** - Web search + AI sentiment analysis (replaces Twitter API!)
 - **Railway** - Cloud hosting platform
 
 ## Prerequisites
 
 Before deploying, you'll need:
 
-1. **Telegram Bot Token**
+1. **Telegram Bot Token** (Required)
    - Message [@BotFather](https://t.me/BotFather) on Telegram
    - Create a new bot with `/newbot`
    - Save the bot token
 
-2. **Twitter API Bearer Token**
-   - Go to [Twitter Developer Portal](https://developer.twitter.com/)
-   - Create a new app or use existing one
-   - Generate a Bearer Token with read permissions
-   - Save the bearer token
-
-3. **xAI API Key**
+2. **xAI API Key** (Required)
    - Visit [x.ai/api](https://x.ai/api)
    - Sign up and get your API key
+   - Includes web search capabilities for Twitter sentiment
    - Save the API key
 
-4. **Railway Account**
+3. **Railway Account** (For deployment)
    - Sign up at [Railway.app](https://railway.app/)
    - Install Railway CLI (optional for local development)
+
+**Note:** Twitter API is NO LONGER REQUIRED! We use Grok's web search instead, which is much more cost-effective.
 
 ## Local Development Setup
 
@@ -84,11 +81,12 @@ Edit `.env` and fill in your credentials:
 
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-TWITTER_BEARER_TOKEN=your_twitter_bearer_token_here
 XAI_API_KEY=your_xai_api_key_here
 DATABASE_URL=postgresql://username:password@localhost:5432/memecoin_bot
 ENVIRONMENT=development
 ```
+
+**Note:** `TWITTER_BEARER_TOKEN` is optional - Grok web search is used by default.
 
 ### 4. Set Up Local PostgreSQL (Optional)
 
@@ -141,11 +139,11 @@ The bot should now be running! Open Telegram and message your bot with `/start`.
    - Add the following variables:
      ```
      TELEGRAM_BOT_TOKEN=your_bot_token
-     TWITTER_BEARER_TOKEN=your_twitter_token
      XAI_API_KEY=your_xai_key
      ENVIRONMENT=production
      ```
    - Note: `DATABASE_URL` is automatically set by Railway's PostgreSQL
+   - Note: `TWITTER_BEARER_TOKEN` is optional (Grok web search is used instead)
 
 5. **Deploy**
    - Railway will automatically detect the `Procfile` and `runtime.txt`
@@ -169,7 +167,6 @@ railway add --database postgresql
 
 # Set environment variables
 railway variables set TELEGRAM_BOT_TOKEN=your_bot_token
-railway variables set TWITTER_BEARER_TOKEN=your_twitter_token
 railway variables set XAI_API_KEY=your_xai_key
 railway variables set ENVIRONMENT=production
 
@@ -182,9 +179,9 @@ railway up
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Yes | Token from @BotFather |
-| `TWITTER_BEARER_TOKEN` | Yes | Twitter API v2 Bearer Token |
-| `XAI_API_KEY` | Yes | xAI Grok API key |
+| `XAI_API_KEY` | Yes | xAI Grok API key (includes web search) |
 | `DATABASE_URL` | Yes | PostgreSQL connection string (auto-set by Railway) |
+| `TWITTER_BEARER_TOKEN` | No | Optional - Grok web search used by default |
 | `ENVIRONMENT` | No | `development` or `production` (default: development) |
 
 ## Usage
@@ -225,16 +222,16 @@ Send `/start` to your bot on Telegram to see the main menu.
 
 1. Click "📊 Sentiment Analyzer"
 2. Click "🔍 Analyze Token Sentiment"
-3. Enter a Solana contract address (44 characters)
+3. Enter a ticker symbol (e.g., `$WEED` or `BONK`) or contract address
 4. Wait for analysis (30-60 seconds)
 
 The bot will:
-- Search recent Twitter mentions (last 7 days)
-- Analyze sentiment with Grok AI
+- Search the web for recent Twitter mentions using Grok
+- Analyze sentiment with Grok-3 AI model
 - Show bullish/bearish/neutral assessment
-- Display sample tweets
+- Display analysis based on community discussions
 
-**Note:** Requires at least 5 tweets for reliable analysis.
+**Note:** Uses Grok web search - no expensive Twitter API needed!
 
 ## Project Structure
 
@@ -283,22 +280,18 @@ python dex_client.py
 - No authentication required
 - Caching: 5 minutes for memecoin data
 
-### Twitter API v2
-- Rate limit: Varies by plan (Basic: 10K tweets/month)
-- Bearer token authentication
-- Search limited to last 7 days
-
-### xAI Grok API
+### xAI Grok API (with Web Search)
 - Rate limit: Depends on your plan
 - API key authentication
-- Caching: 1 hour for sentiment results
+- Includes web search capabilities (replaces Twitter API!)
+- No separate Twitter API costs
 
 ## Caching Strategy
 
 The bot implements intelligent caching to minimize API calls:
 
 - **Memecoin Data**: Cached for 5 minutes
-- **Sentiment Analysis**: Cached for 1 hour
+- **Sentiment Analysis**: Always fresh (no caching for real-time accuracy)
 - **Database Cleanup**: Runs every 6 hours
 - **Old Cache Removal**: Entries older than 7 days
 
@@ -333,15 +326,11 @@ The bot implements intelligent caching to minimize API calls:
 - Error 429: Rate limited, wait 5 seconds
 - No results: Token might not be on Solana/supported DEXs
 
-**Twitter:**
-- Error 401: Invalid bearer token
-- Error 429: Rate limit exceeded, wait or upgrade plan
-- No tweets: Token might be new or unpopular
-
-**Grok:**
-- Error 401: Invalid API key
-- Error 429: Rate limit exceeded
-- Timeout: Normal for long analyses, handled automatically
+**Grok (with Web Search):**
+- Error 401: Invalid API key - check XAI_API_KEY
+- Error 429: Rate limit exceeded - wait or upgrade plan
+- Timeout: Web search may take 30-60 seconds
+- No data found: Token might be new or have low social presence
 
 ### Common Issues
 
@@ -350,10 +339,10 @@ The bot implements intelligent caching to minimize API calls:
 - Must be valid base58 encoding
 - Check for typos
 
-**"Insufficient data for sentiment analysis"**
-- Token needs at least 5 recent tweets
+**"Analysis issue" or low data**
+- Token might have limited social media presence
 - Try a more popular token
-- Token might be too new
+- Token might be too new or inactive
 
 **"No results found"**
 - Adjust filter criteria (less restrictive)
@@ -370,10 +359,11 @@ The bot implements intelligent caching to minimize API calls:
 ## Limitations
 
 - Only supports Solana blockchain tokens
-- Twitter search limited to last 7 days
+- Sentiment based on publicly available Twitter data
 - Sentiment analysis is not financial advice
 - Estimated holders is an approximation
 - Only searches Raydium, Orca, and Serum DEXs
+- Web search results may vary based on data availability
 
 ## Future Enhancements
 
@@ -427,8 +417,7 @@ For issues, questions, or feature requests:
 ## Acknowledgments
 
 - **DexScreener** - For providing free DEX data API
-- **Twitter** - For social media data access
-- **xAI** - For Grok AI sentiment analysis
+- **xAI** - For Grok AI with web search capabilities
 - **Railway** - For easy deployment platform
 - **python-telegram-bot** - For excellent Telegram bot framework
 

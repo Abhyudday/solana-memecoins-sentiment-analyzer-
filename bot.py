@@ -352,10 +352,12 @@ async def show_sentiment_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 Analyze real-time Twitter sentiment for any Solana memecoin:
 
-🔍 **Analyze Token** - Enter contract address
+🔍 **Analyze Token** - Enter contract address or ticker
 ℹ️ **How it Works** - Learn about the analysis
 
-The bot searches tweets from the last 48 hours and uses Grok AI to determine if the community sentiment is bullish, bearish, or neutral.
+The bot uses Grok AI with web search to find recent tweets and determine if the community sentiment is bullish, bearish, or neutral.
+
+✨ **No expensive Twitter API needed!**
 """
     
     await edit_or_send_message(update, text, get_sentiment_menu_keyboard())
@@ -596,8 +598,8 @@ async def handle_sentiment_analyze(update: Update, context: ContextTypes.DEFAULT
 Enter a Solana token to analyze:
 
 The bot will:
-1. Fetch 100+ live tweets from last 48h
-2. Analyze with Grok AI (no cached data)
+1. Search web for recent tweets about the token
+2. Analyze with Grok AI (web search + grok-3)
 3. Provide real-time bullish/bearish/neutral signal
 
 **You can enter:**
@@ -701,14 +703,14 @@ async def handle_ca_input(update: Update, context: ContextTypes.DEFAULT_TYPE, in
 
 
 async def analyze_token_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
-    """Analyze sentiment for a token - ALWAYS uses fresh live data."""
+    """Analyze sentiment using Grok web search - NO Twitter API needed!"""
     # Show loading message
     loading_text = f"""
 🧠 **Analyzing Sentiment**
 
 Contract Address: `{ca}`
 
-⏳ Fetching live Twitter data...
+⏳ Searching web for tweets...
 ⏳ Running AI sentiment analysis...
 
 This may take 30-60 seconds...
@@ -728,67 +730,32 @@ This may take 30-60 seconds...
                 # Cache token info only (not sentiment)
                 db.cache_memecoin(token_info)
         
-        # ALWAYS fetch fresh tweets - NO CACHE
-        # Increase to 100 tweets for better analysis (user is willing to pay)
-        tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=100, days_back=2)
-        
-        # If no tweets found, show error
-        if len(tweets) == 0:
-            rate_limit_text = f"""
-📊 **Sentiment Analysis - {token_name}**
-
-⏱️ **No Tweets Found**
-
-Could not find any recent tweets for this token.
-
-This could mean:
-• Twitter API rate limit (wait 15 minutes)
-• Very new or low-activity token
-• Limited social media presence
-
-Please try again in a few minutes or try a different token.
-"""
-            keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
-            await edit_or_send_message(update, rate_limit_text, keyboard)
-            return
-        
-        if len(tweets) < 5:
-            no_activity_text = f"""
-📊 **Sentiment Analysis - {token_name}**
-
-❌ **Insufficient Data**
-
-Found only {len(tweets)} recent tweets mentioning this token.
-
-Need at least 5 tweets for reliable sentiment analysis.
-
-This could mean:
-• New or low-activity token
-• Limited social media presence  
-• Recent contract address
-
-Try again later or check a more popular token.
-"""
-            
-            keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
-            await edit_or_send_message(update, no_activity_text, keyboard)
-            return
-        
-        # Prepare tweets for sentiment analysis (use more tweets for better accuracy)
-        tweets_text = twitter_client.prepare_tweets_for_sentiment(tweets)
-        
-        # Analyze sentiment with Grok using LIVE data
+        # Use Grok web search to find and analyze tweets
+        # This replaces expensive Twitter API!
         async with GrokClient(os.getenv("XAI_API_KEY")) as grok:
-            sentiment, explanation = await grok.analyze_sentiment(ca, token_name, tweets_text)
+            sentiment, explanation, tweet_count = await grok.search_and_analyze_sentiment(ca, token_name)
         
-        tweet_count = len(tweets)
+        # Check if analysis was successful
+        if sentiment == "neutral" and "error" in explanation.lower():
+            error_text = f"""
+📊 **Sentiment Analysis - {token_name}**
+
+❌ **Analysis Issue**
+
+{explanation}
+
+Please try again in a few moments.
+"""
+            keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
+            await edit_or_send_message(update, error_text, keyboard)
+            return
         
-        # Format and send results - NO CACHING, always fresh data
+        # Format and send results
         result_text = format_sentiment_result(
             sentiment, explanation, tweet_count, [], token_name
         )
         
-        keyboard = get_sentiment_result_keyboard(ca, True)  # Assume we have token data
+        keyboard = get_sentiment_result_keyboard(ca, True)
         await edit_or_send_message(update, result_text, keyboard)
         
     except Exception as e:
@@ -801,9 +768,9 @@ Sorry, there was an error analyzing sentiment for this token:
 `{ca}`
 
 This could be due to:
-• Twitter API rate limits
 • Grok AI service issues
 • Network connectivity problems
+• Rate limits
 
 Please try again in a few minutes.
 """
@@ -869,8 +836,8 @@ You can create custom filters using natural language:
 
 **How It Works:**
 1. Enter ticker symbol ($WEED) or contract address
-2. Bot searches real-time Twitter mentions (last 48 hours)
-3. Grok AI analyzes 100+ tweets with grok-3 model
+2. Grok AI searches the web for recent Twitter mentions
+3. Analyzes community sentiment with grok-3 model
 4. Results show: Bullish, Bearish, or Neutral signal with explanation
 
 **What It Analyzes:**
@@ -879,14 +846,14 @@ You can create custom filters using natural language:
 • Buying/selling sentiment
 • Overall market mood
 
-**Reliability:**
-• Uses 100+ live tweets for analysis
+**Key Features:**
+• Uses Grok web search (no expensive Twitter API!)
 • Always fetches fresh real-time data
 • No cached data - live analysis only
-• Recent tweets from last 48 hours
+• Scans recent tweets from Twitter
 
 **Limitations:**
-• Based only on Twitter activity
+• Based on publicly available Twitter data
 • Not financial advice
 • Sentiment can change quickly
 • Consider multiple sources
@@ -898,19 +865,19 @@ You can create custom filters using natural language:
         text = """
 🤖 **About Solana Memecoins Analyzer**
 
-**Version:** 1.0.0
+**Version:** 2.0.0
 **Developer:** Solana Memecoins Team
 
 **Features:**
 🔍 **Smart Filtering** - Find tokens by multiple criteria
-📊 **AI Sentiment** - Grok-powered Twitter analysis
+📊 **AI Sentiment** - Grok web search + analysis
 💧 **Live Data** - Real-time DexScreener integration
-⚡ **Fast Results** - Cached data for speed
+⚡ **Cost Effective** - No expensive Twitter API!
 
 **Data Sources:**
 • **DexScreener API** - Token prices, volume, liquidity
-• **Twitter API** - Social media mentions
-• **Grok AI** - Advanced sentiment analysis
+• **Grok AI Web Search** - Real-time Twitter sentiment
+• **Grok-3 Model** - Advanced sentiment analysis
 
 **Privacy:**
 • No personal data stored
@@ -1021,22 +988,21 @@ async def init_clients() -> bool:
     """Initialize API clients."""
     global dex_client, twitter_client, grok_client
     
-    # Initialize Twitter client
+    # Twitter client is now optional (using Grok web search instead)
     twitter_bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
     if twitter_bearer_token:
         twitter_client = TwitterClient(twitter_bearer_token)
-        logger.info("Twitter client initialized")
+        logger.info("Twitter client initialized (optional)")
     else:
-        logger.warning("Twitter bearer token not found")
-        return False
+        logger.info("Twitter client not initialized - using Grok web search instead")
     
     # Initialize Grok client (will be created per request due to async context manager)
     xai_api_key = os.getenv("XAI_API_KEY")
     if not xai_api_key:
-        logger.warning("xAI API key not found")
+        logger.error("xAI API key not found - required for sentiment analysis")
         return False
     
-    logger.info("All clients initialized successfully")
+    logger.info("All required clients initialized successfully")
     return True
 
 
