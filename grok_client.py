@@ -59,31 +59,42 @@ EXPLANATION: [Your 3-4 line explanation]"""
         if not self.session:
             raise RuntimeError("Client session not initialized. Use async with.")
         
-        # Create search query for Twitter mentions
-        search_query = f"site:twitter.com {token_name} OR {ca[:12]} solana crypto recent tweets"
-        
-        prompt = f"""Search the web for recent tweets about this Solana memecoin and analyze the sentiment.
+        prompt = f"""You MUST search Twitter RIGHT NOW for live tweets about the Solana token "${token_name}" (contract: {ca[:15]}...).
 
-Token: {token_name}
-Contract Address: {ca}
+CRITICAL INSTRUCTIONS:
+1. Use web search to find REAL CURRENT tweets from Twitter about this token
+2. Search for: "twitter.com {token_name} solana", "twitter.com ${token_name}", "{token_name} crypto"
+3. Look for tweets from the LAST 24-48 HOURS ONLY
+4. DO NOT use cached data - search live Twitter RIGHT NOW
 
-Search for tweets on Twitter discussing this token in the last 48 hours. Look for:
-- Price discussions and predictions
-- Community sentiment and excitement
-- Buying/selling signals
-- Overall market mood
+After finding and analyzing ACTUAL RECENT tweets, determine the sentiment:
 
-After gathering information from web search, provide:
-1. Overall sentiment: Bullish, Bearish, or Neutral
-2. A 3-4 line explanation covering:
-   - Market sentiment and community mood
-   - Key signals from discussions
-   - Activity level and engagement
+BULLISH signals:
+- People talking about buying, accumulating, holding
+- Moon/rocket emojis and positive price predictions
+- Excitement about partnerships, listings, or news
+- "This will 10x", "undervalued", "gem" type comments
+- High engagement and growing community buzz
 
-Respond in this exact format:
+BEARISH signals:
+- People selling, worried about dumps
+- FUD, scam accusations, rug pull concerns
+- Price crash discussions, loss posts
+- Low volume complaints, dead project comments
+- Negative sentiment and fear
+
+NEUTRAL signals:
+- Mixed opinions, some bullish some bearish
+- Low activity or very few tweets
+- Just informational posts with no clear sentiment
+
+Based on the LIVE tweets you find RIGHT NOW, respond in this EXACT format:
+
 SENTIMENT: [Bullish/Bearish/Neutral]
-EXPLANATION: [Your 3-4 line analysis]
-TWEET_COUNT: [Approximate number of relevant tweets found]"""
+EXPLANATION: [Write 3-4 sentences explaining what you found in the actual live tweets - mention specific sentiment patterns, price discussions, community mood, and activity level]
+TWEET_COUNT: [Number of relevant tweets you analyzed]
+
+IMPORTANT: Your analysis MUST be based on ACTUAL CURRENT tweets you find via web search, not assumptions or old data."""
         
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -94,17 +105,17 @@ TWEET_COUNT: [Approximate number of relevant tweets found]"""
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a financial sentiment analyst with real-time web access. Search Twitter and analyze crypto community sentiment accurately."
+                    "content": "You are a crypto sentiment analyst with LIVE web search access. You MUST search Twitter in real-time for current tweets and analyze actual recent discussions. Always use web search to find the latest information. Never use cached data or make assumptions."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "model": "grok-3",
+            "model": "grok-beta",
             "stream": False,
-            "temperature": 0.3,
-            "max_tokens": 800,
+            "temperature": 0.4,
+            "max_tokens": 1200,
             "web_search": True
         }
         
