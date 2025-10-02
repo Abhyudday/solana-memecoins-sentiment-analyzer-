@@ -117,7 +117,7 @@ RATING SCALE GUIDE:
 2/10 = Bearish: Strong FUD, people selling, concerns about project
 1/10 = Extremely bearish: Major red flags, rug pull concerns, mass selling
 
-CRITICAL: Your explanation MUST be SPECIFIC to THIS token based on ACTUAL tweets you found. Don't write generic analysis - mention SPECIFIC things people are saying, SPECIFIC price levels discussed, SPECIFIC concerns or excitement. Each token should have a UNIQUE analysis based on real tweets.
+CRITICAL: Your explanation MUST be SPECIFIC to THIS token based on ACTUAL tweets you found. Don't write generic analysis - mention SPECIFIC things people are saying, SPECIFIC price levels discussed, SPECIFIC concerns or excitement. Each token should have a UNIQUE analysis based on real tweets."""
         
         headers = {
             "Authorization": f"Bearer {self.api_key}",
