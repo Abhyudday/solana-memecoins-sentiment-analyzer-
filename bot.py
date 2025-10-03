@@ -23,13 +23,12 @@ from dotenv import load_dotenv
 # Import our modules
 from db import init_database, get_db_manager
 from dex_client import DexScreenerClient
-from twitter_client import TwitterClient
-from grok_client import GrokClient
 from filters import parse_filter, format_filters_display
 from keyboards import (
-    get_main_menu_keyboard, get_filters_menu_keyboard, get_sentiment_menu_keyboard,
+    get_main_menu_keyboard, get_filters_menu_keyboard,
     get_memecoin_results_keyboard, get_memecoin_details_keyboard,
-    get_sentiment_result_keyboard, get_help_keyboard, CallbackData
+    get_help_keyboard, get_filter_builder_keyboard, get_filter_param_keyboard,
+    CallbackData
 )
 
 # Load environment variables
@@ -42,20 +41,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global clients
-dex_client: Optional[DexScreenerClient] = None
-twitter_client: Optional[TwitterClient] = None
-grok_client: Optional[GrokClient] = None
-
 # User state management
 user_states: Dict[int, Dict[str, Any]] = {}
 
 
 class BotState:
     """Constants for bot states."""
-    WAITING_FILTER_INPUT = "waiting_filter_input"
-    WAITING_CA_INPUT = "waiting_ca_input"
     NORMAL = "normal"
+    BUILDING_FILTER = "building_filter"
 
 
 def get_user_state(user_id: int) -> Dict[str, Any]:
@@ -143,40 +136,6 @@ def format_memecoin_details(coin: Dict[str, Any]) -> str:
     return details.strip()
 
 
-def format_sentiment_result(sentiment: str, explanation: str, tweet_count: int, 
-                          sample_tweets: List[str], token_name: str) -> str:
-    """Format sentiment analysis result."""
-    # Sentiment emoji
-    sentiment_emoji = {
-        "bullish": "🟢 📈",
-        "bearish": "🔴 📉", 
-        "neutral": "⚪ ➡️"
-    }
-    
-    emoji = sentiment_emoji.get(sentiment.lower(), "⚪")
-    signal = sentiment.upper()
-    
-    # If token_name looks like a CA (44 chars), format it differently
-    if len(token_name) == 44:
-        title = "🧠 **Sentiment Analysis**\n📋 `{}`".format(token_name)
-    else:
-        title = f"🧠 **Sentiment Analysis for {token_name}**"
-    
-    result = f"""
-{title}
-
-{emoji} **Signal: {signal}**
-
-💭 **Analysis:**
-{explanation}
-
-📊 **Analyzed {tweet_count} real-time tweets**
-⏰ **Analysis time:** {datetime.now().strftime('%H:%M UTC')}
-"""
-    
-    return result.strip()
-
-
 def format_large_number(number: float) -> str:
     """Format large numbers with K/M/B suffixes."""
     if number >= 1_000_000_000:
@@ -206,14 +165,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     welcome_text = f"""
 👋 **Welcome {user.first_name}!**
 
-🚀 **Solana Memecoins Sentiment Analyzer**
+🚀 **Solana Memecoins Analyzer**
 
-I help you discover and analyze Solana memecoins with:
+I help you discover Solana memecoins with:
 
-🔍 **Smart Filtering** - Find coins by market cap, volume, and activity
-📊 **Sentiment Analysis** - AI-powered analysis of Twitter sentiment
+🔍 **Smart Filtering** - Find coins by market cap, volume, liquidity & holders
+🔧 **Interactive Builder** - Custom filters with easy controls
 💧 **Real-time Data** - Live data from DexScreener
-🧠 **Grok AI** - Advanced sentiment insights
+⚡ **Fast Results** - Comprehensive token discovery
 
 Choose an option below to get started:
 """
@@ -245,8 +204,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await show_main_menu(update, context)
     elif data == CallbackData.MENU_FILTERS:
         await show_filters_menu(update, context)
-    elif data == CallbackData.MENU_SENTIMENT:
-        await show_sentiment_menu(update, context)
     elif data == CallbackData.MENU_HELP:
         await show_help_menu(update, context)
     
@@ -254,12 +211,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif data.startswith("filter_"):
         await handle_filter_selection(update, context, data)
     
-    # Sentiment handlers
-    elif data == CallbackData.SENTIMENT_ANALYZE:
-        await handle_sentiment_analyze(update, context)
-    elif data.startswith("sentiment_token_"):
-        ca = data.replace("sentiment_token_", "")
-        await analyze_token_sentiment(update, context, ca)
+    # Filter builder handlers
+    elif data == "filter_builder":
+        await show_filter_builder(update, context)
+    elif data.startswith("builder_"):
+        await handle_builder_action(update, context, data)
+    elif data.startswith("set_"):
+        await handle_set_filter_value(update, context, data)
+    elif data.startswith("clear_"):
+        await handle_clear_filter(update, context, data)
     
     # Memecoin detail handlers
     elif data.startswith("memecoin_details_"):
@@ -290,20 +250,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages based on user state."""
-    user_id = update.effective_user.id
-    user_state = get_user_state(user_id)
-    text = update.message.text
-    
-    if user_state["state"] == BotState.WAITING_FILTER_INPUT:
-        await handle_custom_filter_input(update, context, text)
-    elif user_state["state"] == BotState.WAITING_CA_INPUT:
-        await handle_ca_input(update, context, text)
-    else:
-        # Default response for unrecognized messages
-        await update.message.reply_text(
-            "Please use the menu buttons below or type /start to begin.",
-            reply_markup=get_main_menu_keyboard()
-        )
+    # Default response for unrecognized messages
+    await update.message.reply_text(
+        "Please use the menu buttons below or type /start to begin.",
+        reply_markup=get_main_menu_keyboard()
+    )
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -314,7 +265,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 Choose what you'd like to do:
 
 🔍 **Memecoin Filters** - Find tokens by criteria
-📊 **Sentiment Analyzer** - Analyze Twitter sentiment
 ℹ️ **Help** - Learn how to use the bot
 """
     
@@ -326,34 +276,18 @@ async def show_filters_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     text = """
 🔍 **Memecoin Filters**
 
-Choose a preset filter or create a custom one:
+Choose a preset filter or build a custom one:
 
+🔧 **Build Custom** - Interactive filter builder with controls
 🚀 **High MC** - Market cap over 100K
 📈 **High Vol** - 24h volume over 10K  
 👥 **Active Users** - 100+ estimated holders
 💎 **Small Cap** - Market cap under 1M
 🏆 **Mid Cap** - Market cap 1M-10M
 💧 **High Liquidity** - Liquidity over 50K
-⚙️ **Custom** - Define your own criteria
 """
     
     await edit_or_send_message(update, text, get_filters_menu_keyboard())
-
-
-async def show_sentiment_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show the sentiment analyzer menu."""
-    text = """
-📊 **Sentiment Analyzer**
-
-Analyze real-time Twitter sentiment for any Solana memecoin:
-
-🔍 **Analyze Token** - Enter contract address
-ℹ️ **How it Works** - Learn about the analysis
-
-The bot searches Twitter using multiple query strategies to find 100+ relevant tweets, then uses Grok AI to determine if the community sentiment is bullish, bearish, or neutral.
-"""
-    
-    await edit_or_send_message(update, text, get_sentiment_menu_keyboard())
 
 
 async def show_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -363,8 +297,7 @@ async def show_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 Learn how to use the Solana Memecoins Analyzer:
 
-🔍 **Filter Help** - How to find memecoins
-📊 **Sentiment Help** - Understanding sentiment analysis  
+🔍 **Filter Help** - How to find memecoins  
 🤖 **About Bot** - Bot information and features
 """
     
@@ -373,33 +306,6 @@ Learn how to use the Solana Memecoins Analyzer:
 
 async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> None:
     """Handle filter selection."""
-    user_id = update.effective_user.id
-    
-    if data == "filter_custom":
-        set_user_state(user_id, BotState.WAITING_FILTER_INPUT)
-        
-        text = """
-⚙️ **Custom Filter**
-
-Enter your filter criteria. Examples:
-
-• `100k mc, 10k volume, 100+ users`
-• `mc > 500k, vol > 25k`
-• `1m mc, 50k vol, 200 holders`
-
-You can use:
-- **mc** or **market cap** for market cap
-- **vol** or **volume** for 24h volume  
-- **holders** or **users** for estimated holders
-- **liq** or **liquidity** for liquidity
-- Suffixes: **k** (thousand), **m** (million), **b** (billion)
-
-Type your filter criteria:
-"""
-        
-        await edit_or_send_message(update, text, None)
-        return
-    
     # Handle preset filters
     preset_map = {
         "filter_high_mc": "high_mc",
@@ -415,24 +321,125 @@ Type your filter criteria:
         await apply_memecoin_filter(update, context, preset_key)
 
 
-async def handle_custom_filter_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-    """Handle custom filter input."""
+async def show_filter_builder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the interactive filter builder."""
     user_id = update.effective_user.id
-    set_user_state(user_id, BotState.NORMAL)
+    user_state = get_user_state(user_id)
     
-    # Parse the filter
-    filters = parse_filter(text)
+    # Initialize builder_filters if not exists
+    if 'builder_filters' not in user_state:
+        user_state['builder_filters'] = {}
     
-    if not filters:
-        await update.message.reply_text(
-            "❌ Could not parse your filter. Please try again with a format like:\n"
-            "`100k mc, 10k volume, 100+ users`",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_filters_menu_keyboard()
-        )
-        return
+    current_filters = user_state.get('builder_filters', {})
     
-    await apply_memecoin_filter(update, context, filters)
+    text = """
+🔧 **Custom Filter Builder**
+
+Configure your filter criteria:
+Click on each parameter to set values or click "Any" to remove restrictions.
+
+When ready, click **Search** to find memecoins.
+"""
+    
+    keyboard = get_filter_builder_keyboard(current_filters)
+    await edit_or_send_message(update, text, keyboard)
+
+
+async def handle_builder_action(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> None:
+    """Handle filter builder actions."""
+    user_id = update.effective_user.id
+    user_state = get_user_state(user_id)
+    
+    if 'builder_filters' not in user_state:
+        user_state['builder_filters'] = {}
+    
+    current_filters = user_state['builder_filters']
+    
+    if data == "builder_search":
+        # Execute search with current filters
+        if not current_filters:
+            query = update.callback_query
+            await query.answer("⚠️ Please set at least one filter!", show_alert=True)
+            return
+        await apply_memecoin_filter(update, context, current_filters)
+    
+    elif data == "builder_reset":
+        # Reset all filters
+        user_state['builder_filters'] = {}
+        await show_filter_builder(update, context)
+    
+    elif data == "builder_mc":
+        # Show MC setting keyboard
+        mc_min = current_filters.get('mc_min')
+        mc_max = current_filters.get('mc_max')
+        text = "💰 **Set Market Cap Filter**\n\nChoose a preset value or clear:"
+        keyboard = get_filter_param_keyboard('mc', mc_min, mc_max)
+        await edit_or_send_message(update, text, keyboard)
+    
+    elif data == "builder_volume":
+        # Show Volume setting keyboard
+        vol_min = current_filters.get('volume_min')
+        vol_max = current_filters.get('volume_max')
+        text = "📊 **Set 24h Volume Filter**\n\nChoose a preset value or clear:"
+        keyboard = get_filter_param_keyboard('volume', vol_min, vol_max)
+        await edit_or_send_message(update, text, keyboard)
+    
+    elif data == "builder_liquidity":
+        # Show Liquidity setting keyboard
+        liq_min = current_filters.get('liquidity_min')
+        liq_max = current_filters.get('liquidity_max')
+        text = "💧 **Set Liquidity Filter**\n\nChoose a preset value or clear:"
+        keyboard = get_filter_param_keyboard('liquidity', liq_min, liq_max)
+        await edit_or_send_message(update, text, keyboard)
+    
+    elif data == "builder_holders":
+        # Show Holders setting keyboard
+        holders_min = current_filters.get('holders_min')
+        holders_max = current_filters.get('holders_max')
+        text = "👥 **Set Holders Filter**\n\nChoose a preset value or clear:"
+        keyboard = get_filter_param_keyboard('holders', holders_min, holders_max)
+        await edit_or_send_message(update, text, keyboard)
+
+
+async def handle_set_filter_value(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> None:
+    """Handle setting a specific filter value."""
+    user_id = update.effective_user.id
+    user_state = get_user_state(user_id)
+    
+    if 'builder_filters' not in user_state:
+        user_state['builder_filters'] = {}
+    
+    # Parse the data: set_{param}_{minmax}_{value}
+    parts = data.replace('set_', '').split('_')
+    if len(parts) >= 3:
+        param = parts[0]
+        min_or_max = parts[1]
+        value = int(parts[2])
+        
+        filter_key = f"{param}_{min_or_max}"
+        user_state['builder_filters'][filter_key] = value
+    
+    # Return to builder
+    await show_filter_builder(update, context)
+
+
+async def handle_clear_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> None:
+    """Clear a specific filter parameter."""
+    user_id = update.effective_user.id
+    user_state = get_user_state(user_id)
+    
+    if 'builder_filters' not in user_state:
+        user_state['builder_filters'] = {}
+    
+    # Parse: clear_{param}
+    param = data.replace('clear_', '')
+    
+    # Remove both min and max for this param
+    user_state['builder_filters'].pop(f'{param}_min', None)
+    user_state['builder_filters'].pop(f'{param}_max', None)
+    
+    # Return to builder
+    await show_filter_builder(update, context)
 
 
 async def apply_memecoin_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, 
@@ -555,168 +562,6 @@ async def show_memecoin_details(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 
-async def handle_sentiment_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle sentiment analysis request."""
-    user_id = update.effective_user.id
-    set_user_state(user_id, BotState.WAITING_CA_INPUT)
-    
-    text = """
-🔍 **Sentiment Analysis**
-
-Enter a Solana token contract address (CA) to analyze:
-
-The bot will:
-1. Search Twitter with multiple strategies to find 100+ relevant tweets
-2. Use fresh data only (no cache)
-3. Analyze with Grok-3 AI model
-4. Provide real-time bullish/bearish/neutral signal
-
-**Example CA:**
-`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
-
-Enter the contract address:
-"""
-    
-    await edit_or_send_message(update, text, None)
-
-
-async def handle_ca_input(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
-    """Handle contract address input for sentiment analysis."""
-    user_id = update.effective_user.id
-    set_user_state(user_id, BotState.NORMAL)
-    
-    ca = ca.strip()
-    
-    if not is_valid_solana_address(ca):
-        await update.message.reply_text(
-            "❌ Invalid Solana contract address format.\n"
-            "Contract addresses should be 44 characters long.\n\n"
-            "Please try again:",
-            reply_markup=get_sentiment_menu_keyboard()
-        )
-        return
-    
-    await analyze_token_sentiment(update, context, ca)
-
-
-async def analyze_token_sentiment(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
-    """Analyze sentiment for a token - ALWAYS uses fresh live data."""
-    # Show loading message
-    loading_text = f"""
-🧠 **Analyzing Sentiment**
-
-Contract Address: `{ca}`
-
-⏳ Fetching live Twitter data...
-⏳ Running AI sentiment analysis...
-
-This may take 30-60 seconds...
-"""
-    
-    await edit_or_send_message(update, loading_text, None)
-    
-    try:
-        db = get_db_manager()
-        
-        # Get token info first
-        token_name = None
-        token_info = None
-        async with DexScreenerClient() as client:
-            token_info = await client.get_token_info(ca)
-            if token_info:
-                token_name = token_info.get('symbol') or token_info.get('name')
-                # Cache token info only (not sentiment)
-                db.cache_memecoin(token_info)
-        
-        # If no token name found, use CA for search
-        if not token_name:
-            token_name = ca  # Use full CA as search term
-            logger.info(f"No token name found for {ca}, using CA for search")
-        
-        # ALWAYS fetch fresh tweets - NO CACHE
-        # Increase to 100 tweets for better analysis (user is willing to pay)
-        tweets = await twitter_client.search_tweets_by_ca(ca, token_name, max_results=100, days_back=2)
-        
-        # If no tweets found, show error
-        if len(tweets) == 0:
-            rate_limit_text = f"""
-📊 **Sentiment Analysis - {token_name}**
-
-⏱️ **No Tweets Found**
-
-Could not find any recent tweets for this token.
-
-This could mean:
-• Twitter API rate limit (wait 15 minutes)
-• Very new or low-activity token
-• Limited social media presence
-
-Please try again in a few minutes or try a different token.
-"""
-            keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
-            await edit_or_send_message(update, rate_limit_text, keyboard)
-            return
-        
-        if len(tweets) < 5:
-            no_activity_text = f"""
-📊 **Sentiment Analysis - {token_name}**
-
-❌ **Insufficient Data**
-
-Found only {len(tweets)} recent tweets mentioning this token.
-
-Need at least 5 tweets for reliable sentiment analysis.
-
-This could mean:
-• New or low-activity token
-• Limited social media presence  
-• Recent contract address
-
-Try again later or check a more popular token.
-"""
-            
-            keyboard = get_sentiment_result_keyboard(ca, token_info is not None)
-            await edit_or_send_message(update, no_activity_text, keyboard)
-            return
-        
-        # Prepare tweets for sentiment analysis (use more tweets for better accuracy)
-        tweets_text = twitter_client.prepare_tweets_for_sentiment(tweets)
-        
-        # Analyze sentiment with Grok using LIVE data
-        async with GrokClient(os.getenv("XAI_API_KEY")) as grok:
-            sentiment, explanation = await grok.analyze_sentiment(ca, token_name, tweets_text)
-        
-        tweet_count = len(tweets)
-        
-        # Format and send results - NO CACHING, always fresh data
-        result_text = format_sentiment_result(
-            sentiment, explanation, tweet_count, [], token_name
-        )
-        
-        keyboard = get_sentiment_result_keyboard(ca, True)  # Assume we have token data
-        await edit_or_send_message(update, result_text, keyboard)
-        
-    except Exception as e:
-        logger.error(f"Error analyzing sentiment for {ca}: {e}")
-        error_text = f"""
-❌ **Sentiment Analysis Failed**
-
-Sorry, there was an error analyzing sentiment for this token:
-
-`{ca}`
-
-This could be due to:
-• Twitter API rate limits
-• Grok AI service issues
-• Network connectivity problems
-
-Please try again in a few minutes.
-"""
-        
-        keyboard = get_sentiment_menu_keyboard()
-        await edit_or_send_message(update, error_text, keyboard)
-
-
 async def copy_contract_address(update: Update, context: ContextTypes.DEFAULT_TYPE, ca: str) -> None:
     """Handle copy contract address request."""
     text = f"""
@@ -748,76 +593,31 @@ async def handle_help_section(update: Update, context: ContextTypes.DEFAULT_TYPE
 • **Mid Cap** - Market cap $1M-$10M
 • **High Liquidity** - Liquidity over $50K
 
-**Custom Filters:**
-You can create custom filters using natural language:
+**Custom Filter Builder:**
+Use the interactive filter builder to:
+1. Click on **Market Cap**, **Volume**, **Liquidity**, or **Holders**
+2. Select preset values (Min/Max)
+3. Click **Any** to remove restrictions
+4. Click **Search** to find tokens
 
-**Examples:**
-• `100k mc, 10k volume, 100+ users`
-• `mc > 500k, vol > 25k`
-• `1m mc, 50k vol, 200 holders`
-
-**Supported Terms:**
-• **mc/market cap** - Market capitalization
-• **vol/volume** - 24-hour trading volume
-• **holders/users** - Estimated holder count
-• **liq/liquidity** - Available liquidity
-
-**Suffixes:**
-• **k** = thousand (1,000)
-• **m** = million (1,000,000)  
-• **b** = billion (1,000,000,000)
-"""
-        
-    elif data == "help_sentiment":
-        text = """
-📊 **Sentiment Analysis Help**
-
-**How It Works:**
-1. Enter a Solana token contract address
-2. Bot searches Twitter using multiple query strategies
-3. Fetches 50-100+ tweets using smart fallback searches
-4. Grok-3 AI analyzes all tweets for sentiment
-5. Results show: Bullish, Bearish, or Neutral signal with explanation
-
-**What It Analyzes:**
-• Community excitement/fear
-• Price predictions and expectations
-• Buying/selling sentiment
-• Overall market mood
-
-**Reliability:**
-• Searches with multiple query strategies
-• Uses 50-100+ tweets per analysis
-• Always fetches fresh data (no cache)
-• Smart fallback if initial search returns few results
-• Extends time range automatically if needed
-
-**Limitations:**
-• Based only on Twitter activity
-• Not financial advice
-• Sentiment can change quickly
-• Consider multiple sources
-
-⚠️ **Always do your own research before investing!**
+The builder makes it easy to combine multiple criteria without typing!
 """
         
     elif data == "help_about":
         text = """
 🤖 **About Solana Memecoins Analyzer**
 
-**Version:** 1.0.0
+**Version:** 2.0.0
 **Developer:** Solana Memecoins Team
 
 **Features:**
 🔍 **Smart Filtering** - Find tokens by multiple criteria
-📊 **AI Sentiment** - Grok-powered Twitter analysis
+🔧 **Interactive Builder** - Easy-to-use filter controls
 💧 **Live Data** - Real-time DexScreener integration
-⚡ **Fast Results** - Cached data for speed
+⚡ **Fast Results** - Comprehensive token discovery
 
 **Data Sources:**
 • **DexScreener API** - Token prices, volume, liquidity
-• **Twitter API** - Social media mentions
-• **Grok AI** - Advanced sentiment analysis
 
 **Privacy:**
 • No personal data stored
@@ -926,24 +726,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def init_clients() -> bool:
     """Initialize API clients."""
-    global dex_client, twitter_client, grok_client
-    
-    # Initialize Twitter client
-    twitter_bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
-    if twitter_bearer_token:
-        twitter_client = TwitterClient(twitter_bearer_token)
-        logger.info("Twitter client initialized")
-    else:
-        logger.warning("Twitter bearer token not found")
-        return False
-    
-    # Initialize Grok client (will be created per request due to async context manager)
-    xai_api_key = os.getenv("XAI_API_KEY")
-    if not xai_api_key:
-        logger.warning("xAI API key not found")
-        return False
-    
-    logger.info("All clients initialized successfully")
+    # No external API clients needed - DexScreener is initialized per-request
+    logger.info("Bot initialized successfully")
     return True
 
 

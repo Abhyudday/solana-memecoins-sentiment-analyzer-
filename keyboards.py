@@ -45,7 +45,6 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     """Get the main menu keyboard."""
     return (KeyboardBuilder()
             .add_button("🔍 Memecoin Filters", "menu_filters")
-            .add_button("📊 Sentiment Analyzer", "menu_sentiment")
             .add_button("ℹ️ Help", "menu_help")
             .build())
 
@@ -53,24 +52,142 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
 def get_filters_menu_keyboard() -> InlineKeyboardMarkup:
     """Get the filters menu keyboard."""
     return (KeyboardBuilder()
+            .add_button("🔧 Build Custom Filter", "filter_builder")
             .add_button("🚀 High MC (100k+)", "filter_high_mc")
             .add_button("📈 High Vol (10k+)", "filter_high_vol")
             .add_button("👥 Active Users (100+ holders)", "filter_active_users")
             .add_button("💎 Small Cap (<1M MC)", "filter_small_cap")
             .add_button("🏆 Mid Cap (1M-10M MC)", "filter_mid_cap")
             .add_button("💧 High Liquidity (50k+)", "filter_high_liquidity")
-            .add_button("⚙️ Custom Filter", "filter_custom")
             .add_button("🔙 Back to Main Menu", "menu_main")
             .build())
 
 
-def get_sentiment_menu_keyboard() -> InlineKeyboardMarkup:
-    """Get the sentiment analyzer menu keyboard."""
-    return (KeyboardBuilder()
-            .add_button("🔍 Analyze Token Sentiment", "sentiment_analyze")
-            .add_button("ℹ️ How it Works", "sentiment_help")
-            .add_button("🔙 Back to Main Menu", "menu_main")
-            .build())
+def get_filter_builder_keyboard(current_filters: Dict[str, Any]) -> InlineKeyboardMarkup:
+    """Get the interactive filter builder keyboard."""
+    builder = KeyboardBuilder()
+    
+    # Market Cap buttons
+    mc_min = current_filters.get('mc_min')
+    mc_max = current_filters.get('mc_max')
+    mc_text = "💰 Market Cap"
+    if mc_min or mc_max:
+        parts = []
+        if mc_min:
+            parts.append(f"≥${format_number(mc_min)}")
+        if mc_max:
+            parts.append(f"≤${format_number(mc_max)}")
+        mc_text += f": {' & '.join(parts)}"
+    else:
+        mc_text += ": Any"
+    builder.add_button(mc_text, "builder_mc")
+    
+    # Volume buttons
+    vol_min = current_filters.get('volume_min')
+    vol_max = current_filters.get('volume_max')
+    vol_text = "📊 24h Volume"
+    if vol_min or vol_max:
+        parts = []
+        if vol_min:
+            parts.append(f"≥${format_number(vol_min)}")
+        if vol_max:
+            parts.append(f"≤${format_number(vol_max)}")
+        vol_text += f": {' & '.join(parts)}"
+    else:
+        vol_text += ": Any"
+    builder.add_button(vol_text, "builder_volume")
+    
+    # Liquidity buttons
+    liq_min = current_filters.get('liquidity_min')
+    liq_max = current_filters.get('liquidity_max')
+    liq_text = "💧 Liquidity"
+    if liq_min or liq_max:
+        parts = []
+        if liq_min:
+            parts.append(f"≥${format_number(liq_min)}")
+        if liq_max:
+            parts.append(f"≤${format_number(liq_max)}")
+        liq_text += f": {' & '.join(parts)}"
+    else:
+        liq_text += ": Any"
+    builder.add_button(liq_text, "builder_liquidity")
+    
+    # Holders buttons
+    holders_min = current_filters.get('holders_min')
+    holders_max = current_filters.get('holders_max')
+    holders_text = "👥 Holders"
+    if holders_min or holders_max:
+        parts = []
+        if holders_min:
+            parts.append(f"≥{int(holders_min)}")
+        if holders_max:
+            parts.append(f"≤{int(holders_max)}")
+        holders_text += f": {' & '.join(parts)}"
+    else:
+        holders_text += ": Any"
+    builder.add_button(holders_text, "builder_holders")
+    
+    # Action buttons
+    builder.add_row([
+        ("🔍 Search", "builder_search"),
+        ("🔄 Reset All", "builder_reset")
+    ])
+    
+    builder.add_button("🔙 Back to Filters", "menu_filters")
+    
+    return builder.build()
+
+
+def get_filter_param_keyboard(param_type: str, current_min: Optional[float] = None, 
+                              current_max: Optional[float] = None) -> InlineKeyboardMarkup:
+    """Get keyboard for setting a specific filter parameter."""
+    builder = KeyboardBuilder()
+    
+    # Title based on param type
+    titles = {
+        'mc': '💰 Market Cap',
+        'volume': '📊 24h Volume',
+        'liquidity': '💧 Liquidity',
+        'holders': '👥 Holders'
+    }
+    
+    # Current values display
+    current_text = "Current: "
+    if current_min or current_max:
+        parts = []
+        if current_min:
+            parts.append(f"Min: ${format_number(current_min)}" if param_type != 'holders' else f"Min: {int(current_min)}")
+        if current_max:
+            parts.append(f"Max: ${format_number(current_max)}" if param_type != 'holders' else f"Max: {int(current_max)}")
+        current_text += ', '.join(parts)
+    else:
+        current_text += "Any"
+    
+    # Preset values based on param type
+    if param_type == 'mc':
+        builder.add_row([("Min: 10K", f"set_{param_type}_min_10000"), ("Min: 100K", f"set_{param_type}_min_100000")])
+        builder.add_row([("Min: 1M", f"set_{param_type}_min_1000000"), ("Min: 10M", f"set_{param_type}_min_10000000")])
+        builder.add_row([("Max: 1M", f"set_{param_type}_max_1000000"), ("Max: 100M", f"set_{param_type}_max_100000000")])
+    elif param_type == 'volume':
+        builder.add_row([("Min: 1K", f"set_{param_type}_min_1000"), ("Min: 10K", f"set_{param_type}_min_10000")])
+        builder.add_row([("Min: 50K", f"set_{param_type}_min_50000"), ("Min: 100K", f"set_{param_type}_min_100000")])
+        builder.add_row([("Max: 1M", f"set_{param_type}_max_1000000"), ("Max: 10M", f"set_{param_type}_max_10000000")])
+    elif param_type == 'liquidity':
+        builder.add_row([("Min: 5K", f"set_{param_type}_min_5000"), ("Min: 10K", f"set_{param_type}_min_10000")])
+        builder.add_row([("Min: 50K", f"set_{param_type}_min_50000"), ("Min: 100K", f"set_{param_type}_min_100000")])
+        builder.add_row([("Max: 500K", f"set_{param_type}_max_500000"), ("Max: 1M", f"set_{param_type}_max_1000000")])
+    elif param_type == 'holders':
+        builder.add_row([("Min: 50", f"set_{param_type}_min_50"), ("Min: 100", f"set_{param_type}_min_100")])
+        builder.add_row([("Min: 500", f"set_{param_type}_min_500"), ("Min: 1000", f"set_{param_type}_min_1000")])
+        builder.add_row([("Max: 5000", f"set_{param_type}_max_5000"), ("Max: 10000", f"set_{param_type}_max_10000")])
+    
+    # Any/Clear button
+    builder.add_button("❌ Clear (Any)", f"clear_{param_type}")
+    
+    # Back button
+    builder.add_button("🔙 Back to Builder", "filter_builder")
+    
+    return builder.build()
 
 
 def get_memecoin_results_keyboard(memecoins: List[Dict[str, Any]], page: int = 0, 
@@ -118,12 +235,8 @@ def get_memecoin_details_keyboard(memecoin: Dict[str, Any]) -> InlineKeyboardMar
     if dex_url:
         builder.add_button("📈 View on DexScreener", "noop", dex_url)
     
-    # Add sentiment analysis button
-    ca = memecoin.get('ca', '')
-    if ca:
-        builder.add_button("🧠 Analyze Sentiment", f"sentiment_token_{ca}")
-    
     # Add copy CA button
+    ca = memecoin.get('ca', '')
     if ca:
         builder.add_button("📋 Copy Contract Address", f"copy_ca_{ca}")
     
@@ -133,31 +246,10 @@ def get_memecoin_details_keyboard(memecoin: Dict[str, Any]) -> InlineKeyboardMar
     return builder.build()
 
 
-def get_sentiment_result_keyboard(ca: str, has_dex_data: bool = False) -> InlineKeyboardMarkup:
-    """Get keyboard for sentiment analysis results."""
-    builder = KeyboardBuilder()
-    
-    # Add view token details if we have DexScreener data
-    if has_dex_data:
-        builder.add_button("📊 View Token Details", f"memecoin_details_{ca}")
-    
-    # Add analyze again button
-    builder.add_button("🔄 Analyze Again", f"sentiment_token_{ca}")
-    
-    # Add copy CA button
-    builder.add_button("📋 Copy Contract Address", f"copy_ca_{ca}")
-    
-    # Add back button
-    builder.add_button("🔙 Back to Sentiment Menu", "menu_sentiment")
-    
-    return builder.build()
-
-
 def get_help_keyboard() -> InlineKeyboardMarkup:
     """Get help menu keyboard."""
     return (KeyboardBuilder()
             .add_button("🔍 Filter Help", "help_filters")
-            .add_button("📊 Sentiment Help", "help_sentiment")
             .add_button("🤖 About Bot", "help_about")
             .add_button("🔙 Back to Main Menu", "menu_main")
             .build())
@@ -233,7 +325,6 @@ class CallbackData:
     # Main menu
     MENU_MAIN = "menu_main"
     MENU_FILTERS = "menu_filters"
-    MENU_SENTIMENT = "menu_sentiment"
     MENU_HELP = "menu_help"
     
     # Filters
@@ -243,15 +334,10 @@ class CallbackData:
     FILTER_SMALL_CAP = "filter_small_cap"
     FILTER_MID_CAP = "filter_mid_cap"
     FILTER_HIGH_LIQUIDITY = "filter_high_liquidity"
-    FILTER_CUSTOM = "filter_custom"
-    
-    # Sentiment
-    SENTIMENT_ANALYZE = "sentiment_analyze"
-    SENTIMENT_HELP = "sentiment_help"
+    FILTER_BUILDER = "filter_builder"
     
     # Help
     HELP_FILTERS = "help_filters"
-    HELP_SENTIMENT = "help_sentiment"
     HELP_ABOUT = "help_about"
     
     # Actions
