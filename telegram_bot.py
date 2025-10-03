@@ -140,7 +140,8 @@ async def show_current_filters(update: Update, context: ContextTypes.DEFAULT_TYP
     
     text = "📊 *Current Filters:*\n\n"
     text += f"💰 Market Cap: ${filters['min_mc']:,.0f} - "
-    text += f"{'∞' if filters['max_mc'] == float('inf') else f'${filters[\"max_mc\"]:,.0f}'}\n"
+    max_mc_display = "∞" if filters['max_mc'] == float('inf') else f"${filters['max_mc']:,.0f}"
+    text += f"{max_mc_display}\n"
     text += f"📊 Min Volume (24h): ${filters['min_volume']:,.0f}\n"
     text += f"⏰ Max Age: {filters['max_age_hours']}h\n"
     text += f"💧 Min Liquidity: ${filters['min_liquidity']:,.0f}\n"
