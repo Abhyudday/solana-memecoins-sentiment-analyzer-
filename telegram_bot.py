@@ -9,183 +9,76 @@ from typing import Dict, List, Optional
 # User session storage
 user_filters: Dict[int, Dict] = {}
 
-class GeckoTerminalAPI:
-    """GeckoTerminal API client for real-time Solana token data"""
+class SolanaTrackerAPI:
+    """Solana Tracker API client for real-time Solana token data"""
     
-    BASE_URL = "https://api.geckoterminal.com/api/v2"
+    BASE_URL = "https://data.solanatracker.io"
+    
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key
+        self.headers = {
+            "Accept": "application/json"
+        }
+        if api_key:
+            self.headers["x-api-key"] = api_key
     
     async def get_new_tokens(self, limit: int = 50) -> List[Dict]:
         """Get newly created tokens on Solana"""
         async with aiohttp.ClientSession() as session:
-            url = f"{self.BASE_URL}/networks/solana/new_pools"
-            params = {"page": 1}
+            url = f"{self.BASE_URL}/tokens/latest"
             
             try:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    print(f"GeckoTerminal Status: {resp.status}")
+                async with session.get(url, headers=self.headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    print(f"SolanaTracker Status: {resp.status}")
                     if resp.status == 200:
                         data = await resp.json()
-                        pools = data.get('data', [])
-                        print(f"GeckoTerminal found {len(pools)} pools")
+                        tokens_data = data if isinstance(data, list) else []
+                        print(f"SolanaTracker found {len(tokens_data)} tokens")
                         
                         # Convert to our format
                         tokens = []
-                        seen_addresses = set()
                         
-                        for pool in pools:
-                            attributes = pool.get('attributes', {})
-                            base_token_price = attributes.get('base_token_price_usd', '0')
+                        for item in tokens_data:
+                            token = item.get('token', {})
+                            pools = item.get('pools', [])
                             
-                            address = attributes.get('base_token_address', '')
-                            if address and address not in seen_addresses:
-                                seen_addresses.add(address)
-                                
-                                # Parse values safely
-                                try:
-                                    fdv = float(attributes.get('fdv_usd', 0) or 0)
-                                    volume_24h = float(attributes.get('volume_usd', {}).get('h24', 0) or 0)
-                                    liquidity = float(attributes.get('reserve_in_usd', 0) or 0)
-                                except (ValueError, TypeError):
-                                    fdv = volume_24h = liquidity = 0
-                                
-                                # Parse timestamp
-                                created_at_str = attributes.get('pool_created_at', '')
-                                created_at = 0
-                                if created_at_str:
-                                    try:
-                                        from datetime import datetime as dt
-                                        created_at = dt.fromisoformat(created_at_str.replace('Z', '+00:00')).timestamp()
-                                    except:
-                                        created_at = 0
-                                
-                                tokens.append({
-                                    'address': address,
-                                    'name': attributes.get('name', 'Unknown'),
-                                    'symbol': attributes.get('base_token_symbol', '?'),
-                                    'mc': fdv,
-                                    'v24hUSD': volume_24h,
-                                    'liquidity': liquidity,
-                                    'createdAt': created_at,
-                                    'priceChange24h': float(attributes.get('price_change_percentage', {}).get('h24', 0) or 0)
-                                })
+                            if not pools:
+                                continue
+                            
+                            # Get primary pool (first one, usually highest liquidity)
+                            pool = pools[0]
+                            
+                            address = token.get('mint', '')
+                            if not address:
+                                continue
+                            
+                            creation = token.get('creation', {})
+                            created_at = creation.get('created_time', 0)
+                            
+                            mc = pool.get('marketCap', {}).get('usd', 0) or 0
+                            volume_24h = pool.get('txns', {}).get('volume24h', 0) or 0
+                            liquidity = pool.get('liquidity', {}).get('usd', 0) or 0
+                            
+                            tokens.append({
+                                'address': address,
+                                'name': token.get('name', 'Unknown'),
+                                'symbol': token.get('symbol', '?'),
+                                'mc': mc,
+                                'v24hUSD': volume_24h,
+                                'liquidity': liquidity,
+                                'createdAt': created_at,
+                                'priceChange24h': 0
+                            })
                         
                         # Sort by creation time (newest first)
                         tokens.sort(key=lambda x: x.get('createdAt', 0), reverse=True)
                         return tokens[:limit]
+                    else:
+                        error_text = await resp.text()
+                        print(f"SolanaTracker Error: {error_text}")
             except Exception as e:
-                print(f"GeckoTerminal Error: {e}")
+                print(f"SolanaTracker Error: {e}")
             return []
-
-class DexScreenerAPI:
-    """DexScreener API client for real-time Solana token data"""
-    
-    BASE_URL = "https://api.dexscreener.com/latest"
-    
-    async def get_new_tokens(self, limit: int = 50) -> List[Dict]:
-        """Get newly created tokens on Solana"""
-        async with aiohttp.ClientSession() as session:
-            # Get tokens by specific DEXs on Solana
-            dexes = ['raydium', 'orca', 'jupiter']
-            all_pairs = []
-            
-            for dex in dexes:
-                url = f"{self.BASE_URL}/dex/pairs/solana"
-                try:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            pairs = data.get('pairs', [])
-                            if pairs:
-                                all_pairs.extend(pairs)
-                                break  # Got data, no need to try other dexes
-                except Exception as e:
-                    print(f"DexScreener {dex} error: {e}")
-                    continue
-            
-            if not all_pairs:
-                print(f"DexScreener: No pairs found")
-                return []
-            
-            print(f"DexScreener found {len(all_pairs)} pairs")
-            
-            # Convert to our format
-            tokens = []
-            seen_addresses = set()
-            
-            for pair in all_pairs:
-                base_token = pair.get('baseToken', {})
-                address = base_token.get('address', '')
-                
-                if address and address not in seen_addresses:
-                    seen_addresses.add(address)
-                    
-                    created_at = pair.get('pairCreatedAt', 0)
-                    if created_at:
-                        created_at = created_at / 1000  # Convert from ms to seconds
-                    
-                    tokens.append({
-                        'address': address,
-                        'name': base_token.get('name', 'Unknown'),
-                        'symbol': base_token.get('symbol', '?'),
-                        'mc': pair.get('fdv', 0) or pair.get('marketCap', 0) or 0,
-                        'v24hUSD': pair.get('volume', {}).get('h24', 0) or 0,
-                        'liquidity': pair.get('liquidity', {}).get('usd', 0) or 0,
-                        'createdAt': created_at,
-                        'priceChange24h': pair.get('priceChange', {}).get('h24', 0) or 0
-                    })
-            
-            # Sort by creation time (newest first)
-            tokens.sort(key=lambda x: x.get('createdAt', 0), reverse=True)
-            return tokens[:limit]
-
-class BirdeyeAPI:
-    """Birdeye API client for real-time Solana token data"""
-    
-    BASE_URL = "https://public-api.birdeye.so"
-    
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.headers = {
-            "X-API-KEY": api_key,
-            "Accept": "application/json"
-        }
-    
-    async def get_new_tokens(self, limit: int = 50) -> List[Dict]:
-        """Get newly created tokens on Solana"""
-        async with aiohttp.ClientSession() as session:
-            url = f"{self.BASE_URL}/defi/tokenlist"
-            params = {
-                "sort_by": "v24hUSD",
-                "sort_type": "desc",
-                "offset": 0,
-                "limit": limit
-            }
-            
-            async with session.get(url, headers=self.headers, params=params) as resp:
-                print(f"Birdeye Status: {resp.status}")
-                if resp.status == 200:
-                    data = await resp.json()
-                    items = data.get('data', {}).get('tokens', [])
-                    if not items:
-                        items = data.get('data', [])
-                    print(f"Birdeye found {len(items)} tokens")
-                    return items
-                else:
-                    error_text = await resp.text()
-                    print(f"Birdeye Error: {error_text}")
-                    return []
-    
-    async def get_token_details(self, address: str) -> Optional[Dict]:
-        """Get detailed token information"""
-        async with aiohttp.ClientSession() as session:
-            url = f"{self.BASE_URL}/defi/v3/token/overview"
-            params = {"address": address}
-            
-            async with session.get(url, headers=self.headers, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get('data', {})
-                return None
 
 def init_user_filters(user_id: int):
     """Initialize default filters for a user"""
@@ -388,24 +281,11 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_tokens = []
     
     try:
-        # Try GeckoTerminal first (free, reliable)
-        print("Trying GeckoTerminal API...")
-        gecko_api = GeckoTerminalAPI()
-        all_tokens = await gecko_api.get_new_tokens(limit=100)
-        
-        # If no results, try DexScreener
-        if not all_tokens:
-            print("Trying DexScreener API...")
-            dex_api = DexScreenerAPI()
-            all_tokens = await dex_api.get_new_tokens(limit=100)
-        
-        # If still no results and Birdeye key is available, try Birdeye
-        if not all_tokens:
-            api_key = os.getenv('BIRDEYE_API_KEY', '')
-            if api_key:
-                print("Trying Birdeye API as fallback...")
-                birdeye_api = BirdeyeAPI(api_key)
-                all_tokens = await birdeye_api.get_new_tokens(limit=100)
+        # Use Solana Tracker API (best for Solana tokens)
+        print("Fetching tokens from SolanaTracker API...")
+        api_key = os.getenv('SOLANATRACKER_API_KEY', '')
+        solana_api = SolanaTrackerAPI(api_key if api_key else None)
+        all_tokens = await solana_api.get_new_tokens(limit=100)
         
         if not all_tokens:
             keyboard = [[InlineKeyboardButton("« Back", callback_data="back_main")]]
