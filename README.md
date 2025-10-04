@@ -17,14 +17,17 @@ Fast Telegram bot for tracking new Solana memecoins with real-time data.
 pip install -r requirements.txt
 ```
 
-2. Get API keys:
-   - Telegram: Create bot with @BotFather
-   - Birdeye: Get API key from https://birdeye.so
+2. Get Telegram bot token:
+   - Create bot with @BotFather on Telegram
+   - Copy the bot token
 
 3. Configure:
 ```bash
-cp .env.example .env
-# Edit .env with your API keys
+# Set environment variable:
+export TELEGRAM_BOT_TOKEN=your_bot_token_here
+
+# Optional: Add Birdeye API for better data (paid)
+export BIRDEYE_API_KEY=your_birdeye_key_here
 ```
 
 4. Run:

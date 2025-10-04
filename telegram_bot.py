@@ -9,6 +9,58 @@ from typing import Dict, List, Optional
 # User session storage
 user_filters: Dict[int, Dict] = {}
 
+class DexScreenerAPI:
+    """DexScreener API client for real-time Solana token data"""
+    
+    BASE_URL = "https://api.dexscreener.com/latest"
+    
+    async def get_new_tokens(self, limit: int = 50) -> List[Dict]:
+        """Get newly created tokens on Solana"""
+        async with aiohttp.ClientSession() as session:
+            # Get latest pairs from Raydium (most popular Solana DEX)
+            url = f"{self.BASE_URL}/dex/search?q=chainId:solana"
+            
+            async with session.get(url) as resp:
+                print(f"DexScreener Status: {resp.status}")
+                if resp.status == 200:
+                    data = await resp.json()
+                    pairs = data.get('pairs', [])
+                    print(f"DexScreener found {len(pairs)} pairs")
+                    
+                    # Convert to our format
+                    tokens = []
+                    seen_addresses = set()
+                    
+                    for pair in pairs:
+                        base_token = pair.get('baseToken', {})
+                        address = base_token.get('address', '')
+                        
+                        if address and address not in seen_addresses:
+                            seen_addresses.add(address)
+                            
+                            created_at = pair.get('pairCreatedAt', 0)
+                            if created_at:
+                                created_at = created_at / 1000  # Convert from ms to seconds
+                            
+                            tokens.append({
+                                'address': address,
+                                'name': base_token.get('name', 'Unknown'),
+                                'symbol': base_token.get('symbol', '?'),
+                                'mc': pair.get('fdv', 0) or pair.get('marketCap', 0) or 0,
+                                'v24hUSD': pair.get('volume', {}).get('h24', 0) or 0,
+                                'liquidity': pair.get('liquidity', {}).get('usd', 0) or 0,
+                                'createdAt': created_at,
+                                'priceChange24h': pair.get('priceChange', {}).get('h24', 0) or 0
+                            })
+                    
+                    # Sort by creation time (newest first)
+                    tokens.sort(key=lambda x: x.get('createdAt', 0), reverse=True)
+                    return tokens[:limit]
+                else:
+                    error_text = await resp.text()
+                    print(f"DexScreener Error: {error_text}")
+                return []
+
 class BirdeyeAPI:
     """Birdeye API client for real-time Solana token data"""
     
@@ -24,9 +76,8 @@ class BirdeyeAPI:
     async def get_new_tokens(self, limit: int = 50) -> List[Dict]:
         """Get newly created tokens on Solana"""
         async with aiohttp.ClientSession() as session:
-            url = f"{self.BASE_URL}/defi/v3/token/new-listing"
+            url = f"{self.BASE_URL}/defi/token_creation"
             params = {
-                "chain": "solana",
                 "sort_by": "creation_time",
                 "sort_type": "desc",
                 "offset": 0,
@@ -34,10 +85,18 @@ class BirdeyeAPI:
             }
             
             async with session.get(url, headers=self.headers, params=params) as resp:
+                print(f"API Status: {resp.status}")
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get('data', {}).get('items', [])
-                return []
+                    print(f"API Response: {data}")
+                    items = data.get('data', {}).get('items', [])
+                    if not items:
+                        items = data.get('data', [])
+                    return items
+                else:
+                    error_text = await resp.text()
+                    print(f"API Error: {error_text}")
+                    return []
     
     async def get_token_details(self, address: str) -> Optional[Dict]:
         """Get detailed token information"""
@@ -249,24 +308,29 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text("🔍 Searching for tokens... Please wait.")
     
-    # Get API key from environment
-    api_key = os.getenv('BIRDEYE_API_KEY', '')
-    if not api_key:
-        await query.edit_message_text(
-            "❌ API key not configured. Please set BIRDEYE_API_KEY environment variable."
-        )
-        return
-    
-    api = BirdeyeAPI(api_key)
+    # Try DexScreener first (free, no API key needed)
+    api = DexScreenerAPI()
     
     try:
         # Fetch tokens
         all_tokens = await api.get_new_tokens(limit=100)
         
+        # If no results and Birdeye key is available, try Birdeye
+        if not all_tokens:
+            api_key = os.getenv('BIRDEYE_API_KEY', '')
+            if api_key:
+                print("Trying Birdeye API as fallback...")
+                birdeye_api = BirdeyeAPI(api_key)
+                all_tokens = await birdeye_api.get_new_tokens(limit=100)
+        
         if not all_tokens:
             keyboard = [[InlineKeyboardButton("« Back", callback_data="back_main")]]
             await query.edit_message_text(
-                "❌ No tokens found or API error.",
+                "❌ No tokens found.\n\n"
+                "This could be due to:\n"
+                "• Network issues\n"
+                "• API rate limits\n"
+                "• Try again in a moment",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
