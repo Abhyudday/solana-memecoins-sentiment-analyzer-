@@ -1,10 +1,14 @@
 import os
 import asyncio
+import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 import aiohttp
 from typing import Dict, List, Optional
+
+# Conversation states
+WAITING_CUSTOM_MC, WAITING_CUSTOM_VOLUME, WAITING_CUSTOM_MIN_AGE, WAITING_CUSTOM_MAX_AGE, WAITING_CUSTOM_LIQUIDITY = range(5)
 
 # User session storage
 user_filters: Dict[int, Dict] = {}
@@ -115,6 +119,62 @@ def format_age(timestamp: int) -> str:
     else:
         return f"{int(age_hours / 24)}d"
 
+def parse_number(text: str) -> float:
+    """Parse numbers with K, M, B suffixes"""
+    text = text.strip().upper().replace('$', '').replace(',', '')
+    
+    multiplier = 1
+    if text.endswith('K'):
+        multiplier = 1_000
+        text = text[:-1]
+    elif text.endswith('M'):
+        multiplier = 1_000_000
+        text = text[:-1]
+    elif text.endswith('B'):
+        multiplier = 1_000_000_000
+        text = text[:-1]
+    
+    try:
+        return float(text) * multiplier
+    except ValueError:
+        return 0
+
+def parse_custom_filter(text: str, filter_type: str) -> Dict:
+    """Parse custom filter input like '>5', '<100', '50-100', '50k', etc."""
+    text = text.strip().lower()
+    result = {}
+    
+    # Handle range format: "50-100", "50k-1m"
+    if '-' in text and not text.startswith('-'):
+        parts = text.split('-')
+        if len(parts) == 2:
+            min_val = parse_number(parts[0])
+            max_val = parse_number(parts[1])
+            if filter_type in ['mc', 'volume', 'liquidity']:
+                result['min'] = min_val
+                result['max'] = max_val
+            return result
+    
+    # Handle comparison operators
+    if text.startswith('>'):
+        val = parse_number(text[1:])
+        result['min'] = val
+        if filter_type in ['mc', 'volume', 'liquidity']:
+            result['max'] = float('inf')
+    elif text.startswith('<'):
+        val = parse_number(text[1:])
+        result['max'] = val
+        if filter_type in ['mc', 'volume', 'liquidity']:
+            result['min'] = 0
+    else:
+        # Single value - treat as minimum
+        val = parse_number(text)
+        result['min'] = val
+        if filter_type in ['mc', 'volume', 'liquidity']:
+            result['max'] = float('inf')
+    
+    return result
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     user_id = update.effective_user.id
@@ -198,6 +258,7 @@ async def filter_mc_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("$1M - $10M", callback_data="mc_1m_10m")],
         [InlineKeyboardButton("$10M+", callback_data="mc_10m_plus")],
         [InlineKeyboardButton("Any", callback_data="mc_any")],
+        [InlineKeyboardButton("✏️ Custom", callback_data="mc_custom")],
         [InlineKeyboardButton("« Back", callback_data="filters")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -219,6 +280,7 @@ async def filter_volume_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [InlineKeyboardButton("$50K+", callback_data="vol_50k")],
         [InlineKeyboardButton("$100K+", callback_data="vol_100k")],
         [InlineKeyboardButton("$500K+", callback_data="vol_500k")],
+        [InlineKeyboardButton("✏️ Custom", callback_data="vol_custom")],
         [InlineKeyboardButton("« Back", callback_data="filters")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -240,6 +302,7 @@ async def filter_min_age_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("6 Hours+", callback_data="min_age_6h")],
         [InlineKeyboardButton("24 Hours+", callback_data="min_age_24h")],
         [InlineKeyboardButton("7 Days+", callback_data="min_age_7d")],
+        [InlineKeyboardButton("✏️ Custom", callback_data="min_age_custom")],
         [InlineKeyboardButton("« Back", callback_data="filters")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -261,6 +324,7 @@ async def filter_max_age_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("24 Hours", callback_data="max_age_24h")],
         [InlineKeyboardButton("7 Days", callback_data="max_age_7d")],
         [InlineKeyboardButton("Any", callback_data="max_age_any")],
+        [InlineKeyboardButton("✏️ Custom", callback_data="max_age_custom")],
         [InlineKeyboardButton("« Back", callback_data="filters")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -282,6 +346,7 @@ async def filter_liquidity_menu(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("$20K+", callback_data="liq_20k")],
         [InlineKeyboardButton("$50K+", callback_data="liq_50k")],
         [InlineKeyboardButton("$100K+", callback_data="liq_100k")],
+        [InlineKeyboardButton("✏️ Custom", callback_data="liq_custom")],
         [InlineKeyboardButton("« Back", callback_data="filters")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -396,6 +461,225 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❌ Error fetching data: {str(e)}",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+async def start_custom_mc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start custom market cap input"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "💰 *Custom Market Cap Filter*\n\n"
+        "Enter your custom market cap filter:\n\n"
+        "Examples:\n"
+        "• `>100k` - Greater than $100K\n"
+        "• `<1m` - Less than $1M\n"
+        "• `500k-2m` - Between $500K and $2M\n"
+        "• `50000` - Minimum $50,000\n\n"
+        "Type your value or /cancel to go back:",
+        parse_mode='Markdown'
+    )
+    return WAITING_CUSTOM_MC
+
+async def start_custom_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start custom volume input"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "📊 *Custom Volume Filter*\n\n"
+        "Enter your custom 24h volume filter:\n\n"
+        "Examples:\n"
+        "• `>50k` - Greater than $50K\n"
+        "• `<100k` - Less than $100K\n"
+        "• `10k` - Minimum $10K\n\n"
+        "Type your value or /cancel to go back:",
+        parse_mode='Markdown'
+    )
+    return WAITING_CUSTOM_VOLUME
+
+async def start_custom_min_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start custom minimum age input"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "⏰ *Custom Minimum Age Filter*\n\n"
+        "Enter minimum token age in hours:\n\n"
+        "Examples:\n"
+        "• `>5` - At least 5 hours old\n"
+        "• `12` - At least 12 hours old\n"
+        "• `0` - No minimum\n\n"
+        "Type your value or /cancel to go back:",
+        parse_mode='Markdown'
+    )
+    return WAITING_CUSTOM_MIN_AGE
+
+async def start_custom_max_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start custom maximum age input"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "⏱️ *Custom Maximum Age Filter*\n\n"
+        "Enter maximum token age in hours:\n\n"
+        "Examples:\n"
+        "• `<100` - Less than 100 hours old\n"
+        "• `48` - Maximum 48 hours old\n"
+        "• `0` - No maximum\n\n"
+        "Type your value or /cancel to go back:",
+        parse_mode='Markdown'
+    )
+    return WAITING_CUSTOM_MAX_AGE
+
+async def start_custom_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start custom liquidity input"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "💧 *Custom Liquidity Filter*\n\n"
+        "Enter your custom minimum liquidity:\n\n"
+        "Examples:\n"
+        "• `>25k` - Greater than $25K\n"
+        "• `<200k` - Less than $200K\n"
+        "• `50k` - Minimum $50K\n\n"
+        "Type your value or /cancel to go back:",
+        parse_mode='Markdown'
+    )
+    return WAITING_CUSTOM_LIQUIDITY
+
+async def receive_custom_mc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive and process custom market cap"""
+    user_id = update.effective_user.id
+    init_user_filters(user_id)
+    text = update.message.text
+    
+    parsed = parse_custom_filter(text, 'mc')
+    if 'min' in parsed:
+        user_filters[user_id]['min_mc'] = parsed['min']
+    if 'max' in parsed:
+        user_filters[user_id]['max_mc'] = parsed['max']
+    
+    await update.message.reply_text("✅ Market cap filter updated!")
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search Tokens", callback_data="search")],
+        [InlineKeyboardButton("⚙️ Set Filters", callback_data="filters")],
+        [InlineKeyboardButton("📊 Current Filters", callback_data="show_filters")]
+    ]
+    await update.message.reply_text(
+        "🚀 *Solana Memecoin Tracker*\n\nWhat would you like to do?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+async def receive_custom_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive and process custom volume"""
+    user_id = update.effective_user.id
+    init_user_filters(user_id)
+    text = update.message.text
+    
+    parsed = parse_custom_filter(text, 'volume')
+    if 'min' in parsed:
+        user_filters[user_id]['min_volume'] = parsed['min']
+    
+    await update.message.reply_text("✅ Volume filter updated!")
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search Tokens", callback_data="search")],
+        [InlineKeyboardButton("⚙️ Set Filters", callback_data="filters")],
+        [InlineKeyboardButton("📊 Current Filters", callback_data="show_filters")]
+    ]
+    await update.message.reply_text(
+        "🚀 *Solana Memecoin Tracker*\n\nWhat would you like to do?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+async def receive_custom_min_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive and process custom minimum age"""
+    user_id = update.effective_user.id
+    init_user_filters(user_id)
+    text = update.message.text
+    
+    parsed = parse_custom_filter(text, 'age')
+    if 'min' in parsed:
+        user_filters[user_id]['min_age_hours'] = parsed['min']
+    
+    await update.message.reply_text("✅ Minimum age filter updated!")
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search Tokens", callback_data="search")],
+        [InlineKeyboardButton("⚙️ Set Filters", callback_data="filters")],
+        [InlineKeyboardButton("📊 Current Filters", callback_data="show_filters")]
+    ]
+    await update.message.reply_text(
+        "🚀 *Solana Memecoin Tracker*\n\nWhat would you like to do?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+async def receive_custom_max_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive and process custom maximum age"""
+    user_id = update.effective_user.id
+    init_user_filters(user_id)
+    text = update.message.text
+    
+    parsed = parse_custom_filter(text, 'age')
+    if 'max' in parsed:
+        user_filters[user_id]['max_age_hours'] = parsed['max']
+    elif 'min' in parsed:
+        user_filters[user_id]['max_age_hours'] = parsed['min']
+    
+    await update.message.reply_text("✅ Maximum age filter updated!")
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search Tokens", callback_data="search")],
+        [InlineKeyboardButton("⚙️ Set Filters", callback_data="filters")],
+        [InlineKeyboardButton("📊 Current Filters", callback_data="show_filters")]
+    ]
+    await update.message.reply_text(
+        "🚀 *Solana Memecoin Tracker*\n\nWhat would you like to do?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+async def receive_custom_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive and process custom liquidity"""
+    user_id = update.effective_user.id
+    init_user_filters(user_id)
+    text = update.message.text
+    
+    parsed = parse_custom_filter(text, 'liquidity')
+    if 'min' in parsed:
+        user_filters[user_id]['min_liquidity'] = parsed['min']
+    
+    await update.message.reply_text("✅ Liquidity filter updated!")
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search Tokens", callback_data="search")],
+        [InlineKeyboardButton("⚙️ Set Filters", callback_data="filters")],
+        [InlineKeyboardButton("📊 Current Filters", callback_data="show_filters")]
+    ]
+    await update.message.reply_text(
+        "🚀 *Solana Memecoin Tracker*\n\nWhat would you like to do?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+async def cancel_custom(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel custom input"""
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search Tokens", callback_data="search")],
+        [InlineKeyboardButton("⚙️ Set Filters", callback_data="filters")],
+        [InlineKeyboardButton("📊 Current Filters", callback_data="show_filters")]
+    ]
+    await update.message.reply_text(
+        "❌ Cancelled.\n\n🚀 *Solana Memecoin Tracker*\n\nWhat would you like to do?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
 
 async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle filter value selections"""
@@ -533,7 +817,53 @@ def main():
     # Create application
     application = Application.builder().token(token).build()
     
-    # Add handlers
+    # Create conversation handlers for custom filters
+    conv_handler_mc = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_custom_mc, pattern="^mc_custom$")],
+        states={
+            WAITING_CUSTOM_MC: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_custom_mc)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_custom)]
+    )
+    
+    conv_handler_volume = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_custom_volume, pattern="^vol_custom$")],
+        states={
+            WAITING_CUSTOM_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_custom_volume)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_custom)]
+    )
+    
+    conv_handler_min_age = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_custom_min_age, pattern="^min_age_custom$")],
+        states={
+            WAITING_CUSTOM_MIN_AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_custom_min_age)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_custom)]
+    )
+    
+    conv_handler_max_age = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_custom_max_age, pattern="^max_age_custom$")],
+        states={
+            WAITING_CUSTOM_MAX_AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_custom_max_age)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_custom)]
+    )
+    
+    conv_handler_liquidity = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_custom_liquidity, pattern="^liq_custom$")],
+        states={
+            WAITING_CUSTOM_LIQUIDITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_custom_liquidity)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_custom)]
+    )
+    
+    # Add handlers (order matters - conversation handlers first)
+    application.add_handler(conv_handler_mc)
+    application.add_handler(conv_handler_volume)
+    application.add_handler(conv_handler_min_age)
+    application.add_handler(conv_handler_max_age)
+    application.add_handler(conv_handler_liquidity)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
     
