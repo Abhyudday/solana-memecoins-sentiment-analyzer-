@@ -360,7 +360,6 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Display results (top 10)
         result_text = f"🎯 *Found {len(filtered_tokens)} tokens*\n\n"
         
-        keyboard = []
         for i, token in enumerate(filtered_tokens[:10], 1):
             name = token.get('name', 'Unknown')
             symbol = token.get('symbol', '?')
@@ -371,18 +370,18 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             age = format_age(created_at) if created_at else 'N/A'
             
-            result_text += f"*{i}. {name}* (${symbol})\n"
-            result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)} | ⏰ {age}\n\n"
-            
-            # Add button with referral link
+            # Add inline BUY link with referral
             referral_url = f"https://t.me/solana_trojanbot?start=r-abhyudday-{address}"
-            keyboard.append([InlineKeyboardButton(f"🚀 Trade {symbol}", url=referral_url)])
+            result_text += f"*{i}. {name}* (${symbol}) [🟢 BUY]({referral_url})\n"
+            result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)} | ⏰ {age}\n\n"
         
         if len(filtered_tokens) > 10:
             result_text += f"_...and {len(filtered_tokens) - 10} more tokens_\n\n"
         
-        keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="search")])
-        keyboard.append([InlineKeyboardButton("« Back", callback_data="back_main")])
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data="search")],
+            [InlineKeyboardButton("« Back", callback_data="back_main")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
