@@ -87,6 +87,7 @@ def init_user_filters(user_id: int):
             'min_mc': 0,
             'max_mc': float('inf'),
             'min_volume': 0,
+            'min_age_hours': 0,  # Minimum age filter
             'max_age_hours': 168,  # 7 days default
             'min_liquidity': 0
         }
@@ -145,7 +146,8 @@ async def show_filters_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("💰 Market Cap", callback_data="filter_mc")],
         [InlineKeyboardButton("📊 Volume (24h)", callback_data="filter_volume")],
-        [InlineKeyboardButton("⏰ Max Age", callback_data="filter_age")],
+        [InlineKeyboardButton("⏰ Min Age", callback_data="filter_min_age")],
+        [InlineKeyboardButton("⏱️ Max Age", callback_data="filter_max_age")],
         [InlineKeyboardButton("💧 Min Liquidity", callback_data="filter_liquidity")],
         [InlineKeyboardButton("🔄 Reset Filters", callback_data="reset_filters")],
         [InlineKeyboardButton("« Back", callback_data="back_main")]
@@ -172,7 +174,9 @@ async def show_current_filters(update: Update, context: ContextTypes.DEFAULT_TYP
     max_mc_display = "∞" if filters['max_mc'] == float('inf') else f"${filters['max_mc']:,.0f}"
     text += f"{max_mc_display}\n"
     text += f"📊 Min Volume (24h): ${filters['min_volume']:,.0f}\n"
-    text += f"⏰ Max Age: {filters['max_age_hours']}h\n"
+    text += f"⏰ Min Age: {filters['min_age_hours']}h\n"
+    max_age_display = "∞" if filters['max_age_hours'] == float('inf') else f"{filters['max_age_hours']}h"
+    text += f"⏱️ Max Age: {max_age_display}\n"
     text += f"💧 Min Liquidity: ${filters['min_liquidity']:,.0f}\n"
     
     keyboard = [
@@ -225,23 +229,44 @@ async def filter_volume_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode='Markdown'
     )
 
-async def filter_age_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Age filter menu"""
+async def filter_min_age_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Minimum age filter menu"""
     query = update.callback_query
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("1 Hour", callback_data="age_1h")],
-        [InlineKeyboardButton("6 Hours", callback_data="age_6h")],
-        [InlineKeyboardButton("24 Hours", callback_data="age_24h")],
-        [InlineKeyboardButton("7 Days", callback_data="age_7d")],
-        [InlineKeyboardButton("Any", callback_data="age_any")],
+        [InlineKeyboardButton("0 Hours (Any)", callback_data="min_age_0h")],
+        [InlineKeyboardButton("1 Hour+", callback_data="min_age_1h")],
+        [InlineKeyboardButton("6 Hours+", callback_data="min_age_6h")],
+        [InlineKeyboardButton("24 Hours+", callback_data="min_age_24h")],
+        [InlineKeyboardButton("7 Days+", callback_data="min_age_7d")],
         [InlineKeyboardButton("« Back", callback_data="filters")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "⏰ *Select Maximum Token Age:*",
+        "⏰ *Select Minimum Token Age:*",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def filter_max_age_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maximum age filter menu"""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("1 Hour", callback_data="max_age_1h")],
+        [InlineKeyboardButton("6 Hours", callback_data="max_age_6h")],
+        [InlineKeyboardButton("24 Hours", callback_data="max_age_24h")],
+        [InlineKeyboardButton("7 Days", callback_data="max_age_7d")],
+        [InlineKeyboardButton("Any", callback_data="max_age_any")],
+        [InlineKeyboardButton("« Back", callback_data="filters")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "⏱️ *Select Maximum Token Age:*",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -319,6 +344,7 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Apply filters
             if (filters['min_mc'] <= mc <= filters['max_mc'] and
                 volume_24h >= filters['min_volume'] and
+                age_hours >= filters['min_age_hours'] and
                 age_hours <= filters['max_age_hours'] and
                 liquidity >= filters['min_liquidity']):
                 filtered_tokens.append(token)
@@ -334,6 +360,7 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Display results (top 10)
         result_text = f"🎯 *Found {len(filtered_tokens)} tokens*\n\n"
         
+        keyboard = []
         for i, token in enumerate(filtered_tokens[:10], 1):
             name = token.get('name', 'Unknown')
             symbol = token.get('symbol', '?')
@@ -345,18 +372,17 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
             age = format_age(created_at) if created_at else 'N/A'
             
             result_text += f"*{i}. {name}* (${symbol})\n"
-            result_text += f"💰 MC: {format_number(mc)}\n"
-            result_text += f"📊 Vol: {format_number(volume)}\n"
-            result_text += f"⏰ Age: {age}\n"
-            result_text += f"🔗 `{address}`\n\n"
+            result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)} | ⏰ {age}\n\n"
+            
+            # Add button with referral link
+            referral_url = f"https://t.me/solana_trojanbot?start=r-abhyudday-{address}"
+            keyboard.append([InlineKeyboardButton(f"🚀 Trade {symbol}", url=referral_url)])
         
         if len(filtered_tokens) > 10:
             result_text += f"_...and {len(filtered_tokens) - 10} more tokens_\n\n"
         
-        keyboard = [
-            [InlineKeyboardButton("🔄 Refresh", callback_data="search")],
-            [InlineKeyboardButton("« Back", callback_data="back_main")]
-        ]
+        keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="search")])
+        keyboard.append([InlineKeyboardButton("« Back", callback_data="back_main")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
@@ -410,16 +436,28 @@ async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_
     elif data == "vol_500k":
         user_filters[user_id]['min_volume'] = 500_000
     
-    # Age filters
-    elif data == "age_1h":
+    # Minimum age filters
+    elif data == "min_age_0h":
+        user_filters[user_id]['min_age_hours'] = 0
+    elif data == "min_age_1h":
+        user_filters[user_id]['min_age_hours'] = 1
+    elif data == "min_age_6h":
+        user_filters[user_id]['min_age_hours'] = 6
+    elif data == "min_age_24h":
+        user_filters[user_id]['min_age_hours'] = 24
+    elif data == "min_age_7d":
+        user_filters[user_id]['min_age_hours'] = 168
+    
+    # Maximum age filters
+    elif data == "max_age_1h":
         user_filters[user_id]['max_age_hours'] = 1
-    elif data == "age_6h":
+    elif data == "max_age_6h":
         user_filters[user_id]['max_age_hours'] = 6
-    elif data == "age_24h":
+    elif data == "max_age_24h":
         user_filters[user_id]['max_age_hours'] = 24
-    elif data == "age_7d":
+    elif data == "max_age_7d":
         user_filters[user_id]['max_age_hours'] = 168
-    elif data == "age_any":
+    elif data == "max_age_any":
         user_filters[user_id]['max_age_hours'] = float('inf')
     
     # Liquidity filters
@@ -440,6 +478,7 @@ async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_
             'min_mc': 0,
             'max_mc': float('inf'),
             'min_volume': 0,
+            'min_age_hours': 0,
             'max_age_hours': 168,
             'min_liquidity': 0
         }
@@ -460,8 +499,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await filter_mc_menu(update, context)
     elif data == "filter_volume":
         await filter_volume_menu(update, context)
-    elif data == "filter_age":
-        await filter_age_menu(update, context)
+    elif data == "filter_min_age":
+        await filter_min_age_menu(update, context)
+    elif data == "filter_max_age":
+        await filter_max_age_menu(update, context)
     elif data == "filter_liquidity":
         await filter_liquidity_menu(update, context)
     elif data == "search":

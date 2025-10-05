@@ -4,3 +4,4 @@ alwaysApply: true
 dont add .md files, other than readme.md and make sure it doesnt look ai generated
 while pushing to repo, add simple 2-5 words messages, like "added grok api" "update ui" and so on
 dont write unncessarily long code, prefer shorter crisp codes
+dont write .md files other than readme.md
