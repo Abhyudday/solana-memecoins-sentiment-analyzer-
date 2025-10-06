@@ -91,8 +91,8 @@ def init_user_filters(user_id: int):
             'min_mc': 0,
             'max_mc': float('inf'),
             'min_volume': 0,
-            'min_age_hours': 0,  # Minimum age filter
-            'max_age_hours': 168,  # 7 days default
+            'min_age_minutes': 0,  # Minimum age filter in minutes
+            'max_age_minutes': 10080,  # 7 days default (7*24*60)
             'min_liquidity': 0
         }
 
@@ -107,13 +107,28 @@ def format_number(num: float) -> str:
     else:
         return f"${num:.2f}"
 
+def normalize_timestamp(timestamp: int) -> int:
+    """Normalize timestamp to seconds (handle both seconds and milliseconds)"""
+    if timestamp > 1e12:  # Likely milliseconds
+        return int(timestamp / 1000)
+    return int(timestamp)
+
 def format_age(timestamp: int) -> str:
     """Format token age"""
-    age_seconds = datetime.now().timestamp() - timestamp
+    if not timestamp or timestamp <= 0:
+        return "N/A"
+    
+    normalized_timestamp = normalize_timestamp(timestamp)
+    age_seconds = datetime.now().timestamp() - normalized_timestamp
+    
+    if age_seconds < 0:
+        return "N/A"
+    
+    age_minutes = age_seconds / 60
     age_hours = age_seconds / 3600
     
-    if age_hours < 1:
-        return f"{int(age_seconds / 60)}m"
+    if age_minutes < 60:
+        return f"{int(age_minutes)}m"
     elif age_hours < 24:
         return f"{int(age_hours)}h"
     else:
@@ -139,6 +154,39 @@ def parse_number(text: str) -> float:
     except ValueError:
         return 0
 
+def parse_time_input(text: str) -> float:
+    """Parse time input and convert to minutes"""
+    text = text.strip().lower().replace(' ', '')
+    
+    # Handle different time units
+    if text.endswith('m') or text.endswith('min') or text.endswith('minutes'):
+        # Minutes
+        num_str = text.replace('m', '').replace('in', '').replace('utes', '')
+        try:
+            return float(num_str)
+        except ValueError:
+            return 0
+    elif text.endswith('h') or text.endswith('hr') or text.endswith('hours'):
+        # Hours to minutes
+        num_str = text.replace('h', '').replace('r', '').replace('ours', '')
+        try:
+            return float(num_str) * 60
+        except ValueError:
+            return 0
+    elif text.endswith('d') or text.endswith('day') or text.endswith('days'):
+        # Days to minutes
+        num_str = text.replace('d', '').replace('ay', '').replace('s', '')
+        try:
+            return float(num_str) * 24 * 60
+        except ValueError:
+            return 0
+    else:
+        # Assume minutes if no unit specified
+        try:
+            return float(text)
+        except ValueError:
+            return 0
+
 def parse_custom_filter(text: str, filter_type: str) -> Dict:
     """Parse custom filter input like '>5', '<100', '50-100', '50k', etc."""
     text = text.strip().lower()
@@ -148,27 +196,39 @@ def parse_custom_filter(text: str, filter_type: str) -> Dict:
     if '-' in text and not text.startswith('-'):
         parts = text.split('-')
         if len(parts) == 2:
-            min_val = parse_number(parts[0])
-            max_val = parse_number(parts[1])
-            if filter_type in ['mc', 'volume', 'liquidity']:
-                result['min'] = min_val
-                result['max'] = max_val
+            if filter_type == 'age':
+                min_val = parse_time_input(parts[0])
+                max_val = parse_time_input(parts[1])
+            else:
+                min_val = parse_number(parts[0])
+                max_val = parse_number(parts[1])
+            result['min'] = min_val
+            result['max'] = max_val
             return result
     
     # Handle comparison operators
     if text.startswith('>'):
-        val = parse_number(text[1:])
+        if filter_type == 'age':
+            val = parse_time_input(text[1:])
+        else:
+            val = parse_number(text[1:])
         result['min'] = val
         if filter_type in ['mc', 'volume', 'liquidity']:
             result['max'] = float('inf')
     elif text.startswith('<'):
-        val = parse_number(text[1:])
+        if filter_type == 'age':
+            val = parse_time_input(text[1:])
+        else:
+            val = parse_number(text[1:])
         result['max'] = val
         if filter_type in ['mc', 'volume', 'liquidity']:
             result['min'] = 0
     else:
-        # Single value - treat as minimum
-        val = parse_number(text)
+        # Single value - treat as minimum for age, or exact value
+        if filter_type == 'age':
+            val = parse_time_input(text)
+        else:
+            val = parse_number(text)
         result['min'] = val
         if filter_type in ['mc', 'volume', 'liquidity']:
             result['max'] = float('inf')
@@ -229,14 +289,25 @@ async def show_current_filters(update: Update, context: ContextTypes.DEFAULT_TYP
     init_user_filters(user_id)
     filters = user_filters[user_id]
     
+    def format_time_display(minutes: float) -> str:
+        if minutes == float('inf'):
+            return "∞"
+        elif minutes >= 1440:  # >= 1 day
+            days = minutes / 1440
+            return f"{days:.1f}d" if days != int(days) else f"{int(days)}d"
+        elif minutes >= 60:  # >= 1 hour
+            hours = minutes / 60
+            return f"{hours:.1f}h" if hours != int(hours) else f"{int(hours)}h"
+        else:
+            return f"{int(minutes)}m"
+    
     text = "📊 *Current Filters:*\n\n"
     text += f"💰 Market Cap: ${filters['min_mc']:,.0f} - "
     max_mc_display = "∞" if filters['max_mc'] == float('inf') else f"${filters['max_mc']:,.0f}"
     text += f"{max_mc_display}\n"
     text += f"📊 Min Volume (24h): ${filters['min_volume']:,.0f}\n"
-    text += f"⏰ Min Age: {filters['min_age_hours']}h\n"
-    max_age_display = "∞" if filters['max_age_hours'] == float('inf') else f"{filters['max_age_hours']}h"
-    text += f"⏱️ Max Age: {max_age_display}\n"
+    text += f"⏰ Min Age: {format_time_display(filters['min_age_minutes'])}\n"
+    text += f"⏱️ Max Age: {format_time_display(filters['max_age_minutes'])}\n"
     text += f"💧 Min Liquidity: ${filters['min_liquidity']:,.0f}\n"
     
     keyboard = [
@@ -297,11 +368,12 @@ async def filter_min_age_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("0 Hours (Any)", callback_data="min_age_0h")],
+        [InlineKeyboardButton("0 Minutes (Any)", callback_data="min_age_0m")],
+        [InlineKeyboardButton("5 Minutes+", callback_data="min_age_5m")],
+        [InlineKeyboardButton("30 Minutes+", callback_data="min_age_30m")],
         [InlineKeyboardButton("1 Hour+", callback_data="min_age_1h")],
         [InlineKeyboardButton("6 Hours+", callback_data="min_age_6h")],
         [InlineKeyboardButton("24 Hours+", callback_data="min_age_24h")],
-        [InlineKeyboardButton("7 Days+", callback_data="min_age_7d")],
         [InlineKeyboardButton("✏️ Custom", callback_data="min_age_custom")],
         [InlineKeyboardButton("« Back", callback_data="filters")]
     ]
@@ -319,6 +391,8 @@ async def filter_max_age_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     
     keyboard = [
+        [InlineKeyboardButton("10 Minutes", callback_data="max_age_10m")],
+        [InlineKeyboardButton("30 Minutes", callback_data="max_age_30m")],
         [InlineKeyboardButton("1 Hour", callback_data="max_age_1h")],
         [InlineKeyboardButton("6 Hours", callback_data="max_age_6h")],
         [InlineKeyboardButton("24 Hours", callback_data="max_age_24h")],
@@ -394,23 +468,32 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_time = datetime.now().timestamp()
         
         for token in all_tokens:
-            # Get market data
-            mc = token.get('mc', 0) or 0
-            volume_24h = token.get('v24hUSD', 0) or 0
-            liquidity = token.get('liquidity', 0) or 0
-            created_at = token.get('createdAt', 0) or 0
+            # Get market data with better validation
+            try:
+                mc = float(token.get('mc', 0) or 0)
+                volume_24h = float(token.get('v24hUSD', 0) or 0)
+                liquidity = float(token.get('liquidity', 0) or 0)
+                created_at = int(token.get('createdAt', 0) or 0)
+            except (ValueError, TypeError):
+                # Skip tokens with invalid data
+                continue
             
-            # Calculate age in hours
-            if created_at:
-                age_hours = (current_time - created_at) / 3600
+            # Calculate age in minutes with proper timestamp handling
+            if created_at and created_at > 0:
+                normalized_timestamp = normalize_timestamp(created_at)
+                age_seconds = current_time - normalized_timestamp
+                if age_seconds < 0:  # Future timestamp, skip
+                    continue
+                age_minutes = age_seconds / 60
             else:
-                age_hours = float('inf')
+                # Skip tokens without valid creation time
+                continue
             
-            # Apply filters
+            # Apply filters with better validation
             if (filters['min_mc'] <= mc <= filters['max_mc'] and
                 volume_24h >= filters['min_volume'] and
-                age_hours >= filters['min_age_hours'] and
-                age_hours <= filters['max_age_hours'] and
+                age_minutes >= filters['min_age_minutes'] and
+                age_minutes <= filters['max_age_minutes'] and
                 liquidity >= filters['min_liquidity']):
                 filtered_tokens.append(token)
         
@@ -426,19 +509,27 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result_text = f"🎯 *Found {len(filtered_tokens)} tokens*\n\n"
         
         for i, token in enumerate(filtered_tokens[:10], 1):
-            name = token.get('name', 'Unknown')
-            symbol = token.get('symbol', '?')
-            address = token.get('address', '')
-            mc = token.get('mc', 0) or 0
-            volume = token.get('v24hUSD', 0) or 0
-            created_at = token.get('createdAt', 0)
-            
-            age = format_age(created_at) if created_at else 'N/A'
-            
-            # Add inline BUY link with referral
-            referral_url = f"https://t.me/solana_trojanbot?start=r-abhyudday-{address}"
-            result_text += f"*{i}. {name}* (${symbol}) [🟢 BUY]({referral_url})\n"
-            result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)} | ⏰ {age}\n\n"
+            try:
+                name = str(token.get('name', 'Unknown'))[:30]  # Limit name length
+                symbol = str(token.get('symbol', '?'))[:10]  # Limit symbol length
+                address = str(token.get('address', ''))
+                mc = float(token.get('mc', 0) or 0)
+                volume = float(token.get('v24hUSD', 0) or 0)
+                created_at = int(token.get('createdAt', 0) or 0)
+                
+                age = format_age(created_at) if created_at else 'N/A'
+                
+                # Validate address before creating referral link
+                if address and len(address) > 20:  # Basic validation
+                    referral_url = f"https://t.me/solana_trojanbot?start=r-abhyudday-{address}"
+                    result_text += f"*{i}. {name}* (${symbol}) [🟢 BUY]({referral_url})\n"
+                else:
+                    result_text += f"*{i}. {name}* (${symbol})\n"
+                
+                result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)} | ⏰ {age}\n\n"
+            except Exception as e:
+                print(f"Error formatting token {i}: {e}")
+                continue
         
         if len(filtered_tokens) > 10:
             result_text += f"_...and {len(filtered_tokens) - 10} more tokens_\n\n"
@@ -501,11 +592,14 @@ async def start_custom_min_age(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     await query.edit_message_text(
         "⏰ *Custom Minimum Age Filter*\n\n"
-        "Enter minimum token age in hours:\n\n"
+        "Enter minimum token age:\n\n"
         "Examples:\n"
-        "• `>5` - At least 5 hours old\n"
-        "• `12` - At least 12 hours old\n"
+        "• `5m` - At least 5 minutes old\n"
+        "• `2h` - At least 2 hours old\n"
+        "• `1d` - At least 1 day old\n"
+        "• `>30m` - Greater than 30 minutes\n"
         "• `0` - No minimum\n\n"
+        "Supported units: m (minutes), h (hours), d (days)\n"
         "Type your value or /cancel to go back:",
         parse_mode='Markdown'
     )
@@ -517,11 +611,13 @@ async def start_custom_max_age(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     await query.edit_message_text(
         "⏱️ *Custom Maximum Age Filter*\n\n"
-        "Enter maximum token age in hours:\n\n"
+        "Enter maximum token age:\n\n"
         "Examples:\n"
-        "• `<100` - Less than 100 hours old\n"
-        "• `48` - Maximum 48 hours old\n"
+        "• `30m` - Maximum 30 minutes old\n"
+        "• `2h` - Maximum 2 hours old\n"
+        "• `<1d` - Less than 1 day old\n"
         "• `0` - No maximum\n\n"
+        "Supported units: m (minutes), h (hours), d (days)\n"
         "Type your value or /cancel to go back:",
         parse_mode='Markdown'
     )
@@ -601,7 +697,7 @@ async def receive_custom_min_age(update: Update, context: ContextTypes.DEFAULT_T
     
     parsed = parse_custom_filter(text, 'age')
     if 'min' in parsed:
-        user_filters[user_id]['min_age_hours'] = parsed['min']
+        user_filters[user_id]['min_age_minutes'] = parsed['min']
     
     await update.message.reply_text("✅ Minimum age filter updated!")
     
@@ -625,9 +721,9 @@ async def receive_custom_max_age(update: Update, context: ContextTypes.DEFAULT_T
     
     parsed = parse_custom_filter(text, 'age')
     if 'max' in parsed:
-        user_filters[user_id]['max_age_hours'] = parsed['max']
+        user_filters[user_id]['max_age_minutes'] = parsed['max']
     elif 'min' in parsed:
-        user_filters[user_id]['max_age_hours'] = parsed['min']
+        user_filters[user_id]['max_age_minutes'] = parsed['min']
     
     await update.message.reply_text("✅ Maximum age filter updated!")
     
@@ -719,29 +815,35 @@ async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_
     elif data == "vol_500k":
         user_filters[user_id]['min_volume'] = 500_000
     
-    # Minimum age filters
-    elif data == "min_age_0h":
-        user_filters[user_id]['min_age_hours'] = 0
+    # Minimum age filters (in minutes)
+    elif data == "min_age_0m":
+        user_filters[user_id]['min_age_minutes'] = 0
+    elif data == "min_age_5m":
+        user_filters[user_id]['min_age_minutes'] = 5
+    elif data == "min_age_30m":
+        user_filters[user_id]['min_age_minutes'] = 30
     elif data == "min_age_1h":
-        user_filters[user_id]['min_age_hours'] = 1
+        user_filters[user_id]['min_age_minutes'] = 60
     elif data == "min_age_6h":
-        user_filters[user_id]['min_age_hours'] = 6
+        user_filters[user_id]['min_age_minutes'] = 360
     elif data == "min_age_24h":
-        user_filters[user_id]['min_age_hours'] = 24
-    elif data == "min_age_7d":
-        user_filters[user_id]['min_age_hours'] = 168
+        user_filters[user_id]['min_age_minutes'] = 1440
     
-    # Maximum age filters
+    # Maximum age filters (in minutes)
+    elif data == "max_age_10m":
+        user_filters[user_id]['max_age_minutes'] = 10
+    elif data == "max_age_30m":
+        user_filters[user_id]['max_age_minutes'] = 30
     elif data == "max_age_1h":
-        user_filters[user_id]['max_age_hours'] = 1
+        user_filters[user_id]['max_age_minutes'] = 60
     elif data == "max_age_6h":
-        user_filters[user_id]['max_age_hours'] = 6
+        user_filters[user_id]['max_age_minutes'] = 360
     elif data == "max_age_24h":
-        user_filters[user_id]['max_age_hours'] = 24
+        user_filters[user_id]['max_age_minutes'] = 1440
     elif data == "max_age_7d":
-        user_filters[user_id]['max_age_hours'] = 168
+        user_filters[user_id]['max_age_minutes'] = 10080
     elif data == "max_age_any":
-        user_filters[user_id]['max_age_hours'] = float('inf')
+        user_filters[user_id]['max_age_minutes'] = float('inf')
     
     # Liquidity filters
     elif data == "liq_0":
@@ -761,8 +863,8 @@ async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_
             'min_mc': 0,
             'max_mc': float('inf'),
             'min_volume': 0,
-            'min_age_hours': 0,
-            'max_age_hours': 168,
+            'min_age_minutes': 0,
+            'max_age_minutes': 10080,  # 7 days in minutes
             'min_liquidity': 0
         }
     
