@@ -30,7 +30,9 @@ class SolanaTrackerAPI:
     async def get_new_tokens(self, limit: int = 50) -> List[Dict]:
         """Get newly created tokens on Solana"""
         async with aiohttp.ClientSession() as session:
-            url = f"{self.BASE_URL}/tokens/latest"
+            # Add limit as query parameter
+            url = f"{self.BASE_URL}/tokens/latest?limit={limit}"
+            print(f"Requesting: {url}")
             
             try:
                 async with session.get(url, headers=self.headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
@@ -57,8 +59,13 @@ class SolanaTrackerAPI:
                             if not address:
                                 continue
                             
+                            # Try multiple timestamp fields
                             creation = token.get('creation', {})
                             created_at = creation.get('created_time', 0)
+                            if not created_at:
+                                created_at = token.get('created_timestamp', 0)
+                            if not created_at:
+                                created_at = pool.get('createdAt', 0)
                             
                             mc = pool.get('marketCap', {}).get('usd', 0) or 0
                             volume_24h = pool.get('txns', {}).get('volume24h', 0) or 0
@@ -78,6 +85,8 @@ class SolanaTrackerAPI:
                                 'priceChange24h': 0,
                                 'holders': holder_count
                             })
+                        
+                        print(f"Successfully parsed {len(tokens)} tokens")
                         
                         # Sort by creation time (newest first)
                         tokens.sort(key=lambda x: x.get('createdAt', 0), reverse=True)
@@ -480,7 +489,9 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Fetching tokens from SolanaTracker API...")
         api_key = os.getenv('SOLANATRACKER_API_KEY', '')
         solana_api = SolanaTrackerAPI(api_key if api_key else None)
-        all_tokens = await solana_api.get_new_tokens(limit=100)
+        # Request more tokens to have a larger pool for filtering
+        all_tokens = await solana_api.get_new_tokens(limit=500)
+        print(f"Received {len(all_tokens)} tokens from API after parsing")
         
         if not all_tokens:
             keyboard = [[InlineKeyboardButton("« Back", callback_data="back_main")]]
@@ -498,6 +509,12 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         filtered_tokens = []
         current_time = datetime.now().timestamp()
         
+        print(f"Starting to filter {len(all_tokens)} tokens")
+        print(f"Current filters: MC={filters['min_mc']}-{filters['max_mc']}, Vol>={filters['min_volume']}, Age={filters['min_age_minutes']}-{filters['max_age_minutes']}min, Liq>={filters['min_liquidity']}, Holders>={filters['min_holders']}")
+        
+        skipped_no_timestamp = 0
+        skipped_filters = 0
+        
         for token in all_tokens:
             # Get market data with better validation
             try:
@@ -506,8 +523,8 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 liquidity = float(token.get('liquidity', 0) or 0)
                 created_at = int(token.get('createdAt', 0) or 0)
                 holders = int(token.get('holders', 0) or 0)
-            except (ValueError, TypeError):
-                # Skip tokens with invalid data
+            except (ValueError, TypeError) as e:
+                print(f"Skipped token due to invalid data: {e}")
                 continue
             
             # Calculate age in minutes with proper timestamp handling
@@ -515,11 +532,13 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 normalized_timestamp = normalize_timestamp(created_at)
                 age_seconds = current_time - normalized_timestamp
                 if age_seconds < 0:  # Future timestamp, skip
+                    print(f"Skipped token with future timestamp: {token.get('symbol')}")
                     continue
                 age_minutes = age_seconds / 60
             else:
-                # Skip tokens without valid creation time
-                continue
+                # For tokens without timestamp, use current time (treat as just created)
+                skipped_no_timestamp += 1
+                age_minutes = 0
             
             # Apply filters with better validation
             if (filters['min_mc'] <= mc <= filters['max_mc'] and
@@ -529,6 +548,10 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 liquidity >= filters['min_liquidity'] and
                 holders >= filters['min_holders']):
                 filtered_tokens.append(token)
+            else:
+                skipped_filters += 1
+        
+        print(f"Filtered results: {len(filtered_tokens)} passed, {skipped_filters} failed filters, {skipped_no_timestamp} had no timestamp")
         
         if not filtered_tokens:
             keyboard = [[InlineKeyboardButton("« Back", callback_data="back_main")]]
