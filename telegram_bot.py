@@ -63,6 +63,10 @@ class SolanaTrackerAPI:
                             creation = token.get('creation', {})
                             created_at = creation.get('created_time', 0) or 0
                             
+                            # Debug: log timestamp for first few tokens
+                            if len(tokens) < 3:
+                                print(f"Token {token.get('symbol', '?')}: created_time={created_at}, type={type(created_at)}")
+                            
                             mc = pool.get('marketCap', {}).get('usd', 0) or 0
                             volume_24h = pool.get('txns', {}).get('volume24h', 0) or 0
                             liquidity = pool.get('liquidity', {}).get('usd', 0) or 0
@@ -84,7 +88,23 @@ class SolanaTrackerAPI:
                         
                         print(f"Successfully parsed {len(tokens)} tokens")
                         if tokens:
-                            print(f"Sample token data: {tokens[0].get('symbol')} - holders: {tokens[0].get('holders')}, age: {tokens[0].get('createdAt')}")
+                            sample = tokens[0]
+                            created = sample.get('createdAt')
+                            print(f"Sample token data: {sample.get('symbol')} - holders: {sample.get('holders')}, createdAt: {created}")
+                            if created:
+                                from datetime import datetime as dt
+                                try:
+                                    # Show human-readable date
+                                    readable_date = dt.fromtimestamp(created).strftime('%Y-%m-%d %H:%M:%S')
+                                    print(f"Token creation date: {readable_date}")
+                                    age_calc = (dt.now().timestamp() - created) / 60
+                                    print(f"Age in minutes: {age_calc:.2f}")
+                                    age_hours = age_calc / 60
+                                    print(f"Age in hours: {age_hours:.2f}")
+                                    age_days = age_hours / 24
+                                    print(f"Age in days: {age_days:.2f}")
+                                except Exception as e:
+                                    print(f"Error parsing timestamp: {e}")
                         
                         # Sort by creation time (newest first)
                         tokens.sort(key=lambda x: x.get('createdAt', 0), reverse=True)
@@ -531,13 +551,15 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 normalized_timestamp = normalize_timestamp(created_at)
                 age_seconds = current_time - normalized_timestamp
                 if age_seconds < 0:  # Future timestamp, skip
-                    print(f"Skipped token with future timestamp: {token.get('symbol')}")
+                    print(f"Skipped token with future timestamp: {token.get('symbol')} - timestamp: {created_at}, normalized: {normalized_timestamp}")
                     continue
                 age_minutes = age_seconds / 60
             else:
                 # For tokens without timestamp, use current time (treat as just created)
                 skipped_no_timestamp += 1
                 age_minutes = 0
+                if skipped_no_timestamp <= 3:  # Log first few
+                    print(f"Token without timestamp: {token.get('symbol')} - created_at was {created_at}")
             
             # Apply filters with better validation and track reasons
             passes_mc = filters['min_mc'] <= mc <= filters['max_mc']
