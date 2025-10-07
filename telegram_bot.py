@@ -71,8 +71,9 @@ class SolanaTrackerAPI:
                             volume_24h = pool.get('txns', {}).get('volume24h', 0) or 0
                             liquidity = pool.get('liquidity', {}).get('usd', 0) or 0
                             
-                            # Get holder count if available
-                            holder_count = token.get('holder', 0) or 0
+                            # Get holder count if available - try multiple fields
+                            holder_count = token.get('holder', 0) or token.get('holders', 0) or token.get('holderCount', 0) or 0
+                            print(f"Token {token.get('symbol', '?')}: holders={holder_count}")
                             
                             tokens.append({
                                 'address': address,
@@ -576,12 +577,9 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 age = format_age(created_at) if created_at else 'N/A'
                 
-                # Validate address before creating referral link
-                if address and len(address) > 20:  # Basic validation
-                    referral_url = f"https://t.me/solana_trojanbot?start=r-abhyudday-{address}"
-                    result_text += f"*{i}. {name}* (${symbol}) [🟢 BUY]({referral_url})\n"
-                else:
-                    result_text += f"*{i}. {name}* (${symbol})\n"
+                # Display token without buy button
+                result_text += f"*{i}. {name}* (${symbol})\n"
+                result_text += f"📍 `{address}`\n"
                 
                 result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)}\n"
                 result_text += f"⏰ {age} | 👥 {holders:,} holders\n\n"
