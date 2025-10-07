@@ -27,13 +27,43 @@ class SolanaTrackerAPI:
         if api_key:
             self.headers["x-api-key"] = api_key
     
-    async def get_new_tokens(self, limit: int = 500) -> List[Dict]:
-        """Get newly created tokens on Solana using search endpoint"""
+    async def get_new_tokens(self, limit: int = 500, filters: dict = None) -> List[Dict]:
+        """Get newly created tokens on Solana using search endpoint with filters"""
         async with aiohttp.ClientSession() as session:
-            # Use search endpoint with sorting by creation date (newest first)
-            # This gives us much more results than /tokens/latest
-            url = f"{self.BASE_URL}/search?sortBy=createdAt&sortOrder=desc&limit={limit}"
-            print(f"Requesting: {url}")
+            # Build URL with filters - let the API do the filtering
+            params = [
+                f"sortBy=createdAt",
+                f"sortOrder=desc",
+                f"limit={limit}"
+            ]
+            
+            # Add filters if provided
+            if filters:
+                if filters.get('min_mc', 0) > 0:
+                    params.append(f"minMarketCap={filters['min_mc']}")
+                if filters.get('max_mc', float('inf')) < float('inf'):
+                    params.append(f"maxMarketCap={filters['max_mc']}")
+                if filters.get('min_volume', 0) > 0:
+                    params.append(f"minVolume_24h={filters['min_volume']}")
+                if filters.get('min_liquidity', 0) > 0:
+                    params.append(f"minLiquidity={filters['min_liquidity']}")
+                if filters.get('min_holders', 0) > 0:
+                    params.append(f"minHolders={filters['min_holders']}")
+                
+                # Convert age filters to timestamps
+                if filters.get('min_age_minutes', 0) > 0 or filters.get('max_age_minutes', float('inf')) < float('inf'):
+                    current_time = int(datetime.now().timestamp())
+                    if filters.get('max_age_minutes', float('inf')) < float('inf'):
+                        # maxCreatedAt = current time - min age (most recent allowed)
+                        max_created = current_time - (filters['min_age_minutes'] * 60)
+                        params.append(f"maxCreatedAt={int(max_created)}")
+                    if filters.get('min_age_minutes', 0) > 0:
+                        # minCreatedAt = current time - max age (oldest allowed)
+                        min_created = current_time - (filters['max_age_minutes'] * 60)
+                        params.append(f"minCreatedAt={int(min_created)}")
+            
+            url = f"{self.BASE_URL}/search?{'&'.join(params)}"
+            print(f"Requesting with filters: {url}")
             
             try:
                 async with session.get(url, headers=self.headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
@@ -506,13 +536,13 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_tokens = []
     
     try:
-        # Use Solana Tracker API (best for Solana tokens)
+        # Use Solana Tracker API with server-side filtering
         print("Fetching tokens from SolanaTracker API...")
         api_key = os.getenv('SOLANATRACKER_API_KEY', '')
         solana_api = SolanaTrackerAPI(api_key if api_key else None)
-        # Request more tokens to have a larger pool for filtering
-        all_tokens = await solana_api.get_new_tokens(limit=500)
-        print(f"Received {len(all_tokens)} tokens from API after parsing")
+        # Pass filters to API for server-side filtering (scans ALL tokens)
+        all_tokens = await solana_api.get_new_tokens(limit=500, filters=filters)
+        print(f"Received {len(all_tokens)} tokens from API after parsing (filtered by API)")
         
         if not all_tokens:
             keyboard = [[InlineKeyboardButton("« Back", callback_data="back_main")]]
@@ -526,12 +556,12 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Filter tokens
+        # API already did most filtering, do minimal client-side validation
         filtered_tokens = []
         current_time = datetime.now().timestamp()
         
-        print(f"Starting to filter {len(all_tokens)} tokens")
-        print(f"Current filters: MC={filters['min_mc']}-{filters['max_mc']}, Vol>={filters['min_volume']}, Age={filters['min_age_minutes']}-{filters['max_age_minutes']}min, Liq>={filters['min_liquidity']}, Holders>={filters['min_holders']}")
+        print(f"Validating {len(all_tokens)} tokens (API pre-filtered)")
+        print(f"Applied filters: MC={filters['min_mc']}-{filters['max_mc']}, Vol>={filters['min_volume']}, Age={filters['min_age_minutes']}-{filters['max_age_minutes']}min, Liq>={filters['min_liquidity']}, Holders>={filters['min_holders']}")
         
         skipped_no_timestamp = 0
         skipped_filters = 0
@@ -591,8 +621,13 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if not filtered_tokens:
             keyboard = [[InlineKeyboardButton("« Back", callback_data="back_main")]]
+            filter_summary = f"MC: {format_number(filters['min_mc'])}+\n" if filters['min_mc'] > 0 else ""
+            filter_summary += f"Holders: {filters['min_holders']:,}+\n" if filters['min_holders'] > 0 else ""
+            filter_summary += f"Liq: {format_number(filters['min_liquidity'])}+\n" if filters['min_liquidity'] > 0 else ""
+            filter_summary += f"Vol: {format_number(filters['min_volume'])}+\n" if filters['min_volume'] > 0 else ""
+            
             await query.edit_message_text(
-                "😔 No tokens match your filters.\n\nTry adjusting your criteria.",
+                f"😔 No tokens match your filters.\n\n{filter_summary if filter_summary else 'Try adjusting your criteria.'}",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
