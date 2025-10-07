@@ -160,7 +160,10 @@ def format_age(timestamp: int) -> str:
     age_minutes = age_seconds / 60
     age_hours = age_seconds / 3600
     
-    if age_minutes < 60:
+    # Show seconds for very new tokens (< 1 minute)
+    if age_seconds < 60:
+        return f"{int(age_seconds)}s"
+    elif age_minutes < 60:
         return f"{int(age_minutes)}m"
     elif age_hours < 24:
         return f"{int(age_hours)}h"
