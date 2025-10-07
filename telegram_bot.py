@@ -607,6 +607,7 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 address = str(token.get('address', ''))
                 mc = float(token.get('mc', 0) or 0)
                 volume = float(token.get('v24hUSD', 0) or 0)
+                liquidity = float(token.get('liquidity', 0) or 0)
                 created_at = int(token.get('createdAt', 0) or 0)
                 holders = int(token.get('holders', 0) or 0)
                 
@@ -617,10 +618,11 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result_text += f"📍 `{address}`\n"
                 
                 result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)}\n"
+                result_text += f"💧 Liq: {format_number(liquidity)} | ⏰ {age}"
                 if holders > 0:
-                    result_text += f"⏰ {age} | 👥 {holders:,} holders\n\n"
+                    result_text += f" | 👥 {holders:,}\n\n"
                 else:
-                    result_text += f"⏰ {age}\n\n"
+                    result_text += f"\n\n"
             except Exception as e:
                 print(f"Error formatting token {i}: {e}")
                 continue
