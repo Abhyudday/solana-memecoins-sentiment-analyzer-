@@ -27,57 +27,57 @@ class SolanaTrackerAPI:
         if api_key:
             self.headers["x-api-key"] = api_key
     
-    async def get_new_tokens(self, limit: int = 50) -> List[Dict]:
-        """Get newly created tokens on Solana"""
+    async def get_new_tokens(self, limit: int = 500) -> List[Dict]:
+        """Get newly created tokens on Solana using search endpoint"""
         async with aiohttp.ClientSession() as session:
-            # Add limit as query parameter
-            url = f"{self.BASE_URL}/tokens/latest?limit={limit}"
+            # Use search endpoint with sorting by creation date (newest first)
+            # This gives us much more results than /tokens/latest
+            url = f"{self.BASE_URL}/search?sortBy=createdAt&sortOrder=desc&limit={limit}"
             print(f"Requesting: {url}")
             
             try:
                 async with session.get(url, headers=self.headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     print(f"SolanaTracker Status: {resp.status}")
                     if resp.status == 200:
-                        data = await resp.json()
-                        tokens_data = data if isinstance(data, list) else []
-                        print(f"SolanaTracker found {len(tokens_data)} tokens")
+                        response = await resp.json()
+                        # Search endpoint returns {"status": "success", "data": [...], "total": X}
+                        if response.get('status') == 'success':
+                            tokens_data = response.get('data', [])
+                        else:
+                            tokens_data = response if isinstance(response, list) else []
+                        
+                        print(f"SolanaTracker found {len(tokens_data)} tokens (Total available: {response.get('total', 'unknown') if isinstance(response, dict) else 'unknown'})")
                         
                         # Convert to our format
                         tokens = []
                         
                         for item in tokens_data:
-                            token = item.get('token', {})
-                            pools = item.get('pools', [])
-                            
-                            if not pools:
-                                continue
-                            
-                            # Get primary pool (first one, usually highest liquidity)
-                            pool = pools[0]
-                            
-                            address = token.get('mint', '')
+                            # Search endpoint returns different structure
+                            # Data is at root level, not nested in token/pools
+                            address = item.get('mint', '')
                             if not address:
                                 continue
                             
-                            # Get created_time from token.creation.created_time (Unix timestamp in seconds)
-                            creation = token.get('creation', {})
-                            created_at = creation.get('created_time', 0) or 0
+                            # Get created_time from tokenDetails.time (Unix timestamp in seconds)
+                            token_details = item.get('tokenDetails', {})
+                            created_at = token_details.get('time', 0) or 0
                             
                             # Debug: log timestamp for first few tokens
                             if len(tokens) < 3:
-                                print(f"Token {token.get('symbol', '?')}: created_time={created_at}, type={type(created_at)}")
+                                print(f"Token {item.get('symbol', '?')}: created_time={created_at}, type={type(created_at)}")
                             
-                            mc = pool.get('marketCap', {}).get('usd', 0) or 0
-                            volume_24h = pool.get('txns', {}).get('volume24h', 0) or 0
-                            liquidity = pool.get('liquidity', {}).get('usd', 0) or 0
+                            # Get market data directly from root level
+                            mc = item.get('marketCapUsd', 0) or 0
+                            volume_24h = item.get('volume_24h', 0) or 0
+                            liquidity = item.get('liquidityUsd', 0) or 0
                             
-                            # Get holder count from root level of item (not from token or pool)
+                            # Get holder count from root level
                             holder_count = item.get('holders', 0) or 0
                             
                             tokens.append({
                                 'address': address,
-                                'name': token.get('name', 'Unknown'),
-                                'symbol': token.get('symbol', '?'),
+                                'name': item.get('name', 'Unknown'),
+                                'symbol': item.get('symbol', '?'),
                                 'mc': mc,
                                 'v24hUSD': volume_24h,
                                 'liquidity': liquidity,
