@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 import re
@@ -8,7 +9,7 @@ import aiohttp
 from typing import Dict, List, Optional
 
 # Conversation states
-WAITING_CUSTOM_MC, WAITING_CUSTOM_VOLUME, WAITING_CUSTOM_MIN_AGE, WAITING_CUSTOM_MAX_AGE, WAITING_CUSTOM_LIQUIDITY = range(5)
+WAITING_CUSTOM_MC, WAITING_CUSTOM_VOLUME, WAITING_CUSTOM_MIN_AGE, WAITING_CUSTOM_MAX_AGE, WAITING_CUSTOM_LIQUIDITY, WAITING_CUSTOM_HOLDERS = range(6)
 
 # User session storage
 user_filters: Dict[int, Dict] = {}
@@ -63,6 +64,9 @@ class SolanaTrackerAPI:
                             volume_24h = pool.get('txns', {}).get('volume24h', 0) or 0
                             liquidity = pool.get('liquidity', {}).get('usd', 0) or 0
                             
+                            # Get holder count if available
+                            holder_count = token.get('holder', 0) or 0
+                            
                             tokens.append({
                                 'address': address,
                                 'name': token.get('name', 'Unknown'),
@@ -71,7 +75,8 @@ class SolanaTrackerAPI:
                                 'v24hUSD': volume_24h,
                                 'liquidity': liquidity,
                                 'createdAt': created_at,
-                                'priceChange24h': 0
+                                'priceChange24h': 0,
+                                'holders': holder_count
                             })
                         
                         # Sort by creation time (newest first)
@@ -93,7 +98,8 @@ def init_user_filters(user_id: int):
             'min_volume': 0,
             'min_age_minutes': 0,  # Minimum age filter in minutes
             'max_age_minutes': 10080,  # 7 days default (7*24*60)
-            'min_liquidity': 0
+            'min_liquidity': 0,
+            'min_holders': 0
         }
 
 def format_number(num: float) -> str:
@@ -269,6 +275,7 @@ async def show_filters_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⏰ Min Age", callback_data="filter_min_age")],
         [InlineKeyboardButton("⏱️ Max Age", callback_data="filter_max_age")],
         [InlineKeyboardButton("💧 Min Liquidity", callback_data="filter_liquidity")],
+        [InlineKeyboardButton("👥 Min Holders", callback_data="filter_holders")],
         [InlineKeyboardButton("🔄 Reset Filters", callback_data="reset_filters")],
         [InlineKeyboardButton("« Back", callback_data="back_main")]
     ]
@@ -309,6 +316,7 @@ async def show_current_filters(update: Update, context: ContextTypes.DEFAULT_TYP
     text += f"⏰ Min Age: {format_time_display(filters['min_age_minutes'])}\n"
     text += f"⏱️ Max Age: {format_time_display(filters['max_age_minutes'])}\n"
     text += f"💧 Min Liquidity: ${filters['min_liquidity']:,.0f}\n"
+    text += f"👥 Min Holders: {filters['min_holders']:,}\n"
     
     keyboard = [
         [InlineKeyboardButton("⚙️ Edit Filters", callback_data="filters")],
@@ -431,6 +439,29 @@ async def filter_liquidity_menu(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode='Markdown'
     )
 
+async def filter_holders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Holders filter menu"""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("0+ (Any)", callback_data="holders_0")],
+        [InlineKeyboardButton("10+", callback_data="holders_10")],
+        [InlineKeyboardButton("50+", callback_data="holders_50")],
+        [InlineKeyboardButton("100+", callback_data="holders_100")],
+        [InlineKeyboardButton("500+", callback_data="holders_500")],
+        [InlineKeyboardButton("1000+", callback_data="holders_1000")],
+        [InlineKeyboardButton("✏️ Custom", callback_data="holders_custom")],
+        [InlineKeyboardButton("« Back", callback_data="filters")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "👥 *Select Minimum Holders:*",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
 async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Search and display tokens based on filters"""
     query = update.callback_query
@@ -474,6 +505,7 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 volume_24h = float(token.get('v24hUSD', 0) or 0)
                 liquidity = float(token.get('liquidity', 0) or 0)
                 created_at = int(token.get('createdAt', 0) or 0)
+                holders = int(token.get('holders', 0) or 0)
             except (ValueError, TypeError):
                 # Skip tokens with invalid data
                 continue
@@ -494,7 +526,8 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 volume_24h >= filters['min_volume'] and
                 age_minutes >= filters['min_age_minutes'] and
                 age_minutes <= filters['max_age_minutes'] and
-                liquidity >= filters['min_liquidity']):
+                liquidity >= filters['min_liquidity'] and
+                holders >= filters['min_holders']):
                 filtered_tokens.append(token)
         
         if not filtered_tokens:
@@ -516,6 +549,7 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 mc = float(token.get('mc', 0) or 0)
                 volume = float(token.get('v24hUSD', 0) or 0)
                 created_at = int(token.get('createdAt', 0) or 0)
+                holders = int(token.get('holders', 0) or 0)
                 
                 age = format_age(created_at) if created_at else 'N/A'
                 
@@ -526,7 +560,8 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     result_text += f"*{i}. {name}* (${symbol})\n"
                 
-                result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)} | ⏰ {age}\n\n"
+                result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)}\n"
+                result_text += f"⏰ {age} | 👥 {holders:,} holders\n\n"
             except Exception as e:
                 print(f"Error formatting token {i}: {e}")
                 continue
@@ -638,6 +673,22 @@ async def start_custom_liquidity(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='Markdown'
     )
     return WAITING_CUSTOM_LIQUIDITY
+
+async def start_custom_holders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start custom holders input"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "👥 *Custom Holders Filter*\n\n"
+        "Enter your custom minimum holder count:\n\n"
+        "Examples:\n"
+        "• `>100` - Greater than 100 holders\n"
+        "• `<5000` - Less than 5000 holders\n"
+        "• `250` - Minimum 250 holders\n\n"
+        "Type your value or /cancel to go back:",
+        parse_mode='Markdown'
+    )
+    return WAITING_CUSTOM_HOLDERS
 
 async def receive_custom_mc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receive and process custom market cap"""
@@ -763,6 +814,30 @@ async def receive_custom_liquidity(update: Update, context: ContextTypes.DEFAULT
     )
     return ConversationHandler.END
 
+async def receive_custom_holders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive and process custom holders"""
+    user_id = update.effective_user.id
+    init_user_filters(user_id)
+    text = update.message.text
+    
+    parsed = parse_custom_filter(text, 'holders')
+    if 'min' in parsed:
+        user_filters[user_id]['min_holders'] = int(parsed['min'])
+    
+    await update.message.reply_text("✅ Holders filter updated!")
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search Tokens", callback_data="search")],
+        [InlineKeyboardButton("⚙️ Set Filters", callback_data="filters")],
+        [InlineKeyboardButton("📊 Current Filters", callback_data="show_filters")]
+    ]
+    await update.message.reply_text(
+        "🚀 *Solana Memecoin Tracker*\n\nWhat would you like to do?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
 async def cancel_custom(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel custom input"""
     keyboard = [
@@ -857,6 +932,20 @@ async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_
     elif data == "liq_100k":
         user_filters[user_id]['min_liquidity'] = 100_000
     
+    # Holder filters
+    elif data == "holders_0":
+        user_filters[user_id]['min_holders'] = 0
+    elif data == "holders_10":
+        user_filters[user_id]['min_holders'] = 10
+    elif data == "holders_50":
+        user_filters[user_id]['min_holders'] = 50
+    elif data == "holders_100":
+        user_filters[user_id]['min_holders'] = 100
+    elif data == "holders_500":
+        user_filters[user_id]['min_holders'] = 500
+    elif data == "holders_1000":
+        user_filters[user_id]['min_holders'] = 1000
+    
     # Reset filters
     elif data == "reset_filters":
         user_filters[user_id] = {
@@ -865,7 +954,8 @@ async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_
             'min_volume': 0,
             'min_age_minutes': 0,
             'max_age_minutes': 10080,  # 7 days in minutes
-            'min_liquidity': 0
+            'min_liquidity': 0,
+            'min_holders': 0
         }
     
     await query.answer("✅ Filter updated!")
@@ -890,6 +980,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await filter_max_age_menu(update, context)
     elif data == "filter_liquidity":
         await filter_liquidity_menu(update, context)
+    elif data == "filter_holders":
+        await filter_holders_menu(update, context)
     elif data == "search":
         await search_tokens(update, context)
     elif data == "back_main":
@@ -960,12 +1052,21 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_custom)]
     )
     
+    conv_handler_holders = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_custom_holders, pattern="^holders_custom$")],
+        states={
+            WAITING_CUSTOM_HOLDERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_custom_holders)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_custom)]
+    )
+    
     # Add handlers (order matters - conversation handlers first)
     application.add_handler(conv_handler_mc)
     application.add_handler(conv_handler_volume)
     application.add_handler(conv_handler_min_age)
     application.add_handler(conv_handler_max_age)
     application.add_handler(conv_handler_liquidity)
+    application.add_handler(conv_handler_holders)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
     
