@@ -51,16 +51,20 @@ class SolanaTrackerAPI:
                     params.append(f"minHolders={filters['min_holders']}")
                 
                 # Convert age filters to timestamps
-                if filters.get('min_age_minutes', 0) > 0 or filters.get('max_age_minutes', float('inf')) < float('inf'):
-                    current_time = int(datetime.now().timestamp())
-                    if filters.get('max_age_minutes', float('inf')) < float('inf'):
-                        # maxCreatedAt = current time - min age (most recent allowed)
-                        max_created = current_time - (filters['min_age_minutes'] * 60)
-                        params.append(f"maxCreatedAt={int(max_created)}")
-                    if filters.get('min_age_minutes', 0) > 0:
-                        # minCreatedAt = current time - max age (oldest allowed)
-                        min_created = current_time - (filters['max_age_minutes'] * 60)
-                        params.append(f"minCreatedAt={int(min_created)}")
+                current_time = int(datetime.now().timestamp())
+                max_age_minutes = filters.get('max_age_minutes', float('inf'))
+                min_age_minutes = filters.get('min_age_minutes', 0)
+                
+                # Only add timestamp filters if values are not infinity
+                if max_age_minutes < float('inf'):
+                    # minCreatedAt = current time - max age (oldest allowed)
+                    min_created = current_time - int(max_age_minutes * 60)
+                    params.append(f"minCreatedAt={min_created}")
+                
+                if min_age_minutes > 0:
+                    # maxCreatedAt = current time - min age (most recent allowed)
+                    max_created = current_time - int(min_age_minutes * 60)
+                    params.append(f"maxCreatedAt={max_created}")
             
             url = f"{self.BASE_URL}/search?{'&'.join(params)}"
             print(f"Requesting with filters: {url}")
