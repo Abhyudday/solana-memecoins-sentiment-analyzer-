@@ -59,21 +59,16 @@ class SolanaTrackerAPI:
                             if not address:
                                 continue
                             
-                            # Try multiple timestamp fields
+                            # Get created_time from token.creation.created_time (Unix timestamp in seconds)
                             creation = token.get('creation', {})
-                            created_at = creation.get('created_time', 0)
-                            if not created_at:
-                                created_at = token.get('created_timestamp', 0)
-                            if not created_at:
-                                created_at = pool.get('createdAt', 0)
+                            created_at = creation.get('created_time', 0) or 0
                             
                             mc = pool.get('marketCap', {}).get('usd', 0) or 0
                             volume_24h = pool.get('txns', {}).get('volume24h', 0) or 0
                             liquidity = pool.get('liquidity', {}).get('usd', 0) or 0
                             
-                            # Get holder count if available - try multiple fields
-                            holder_count = token.get('holder', 0) or token.get('holders', 0) or token.get('holderCount', 0) or 0
-                            print(f"Token {token.get('symbol', '?')}: holders={holder_count}")
+                            # Get holder count from root level of item (not from token or pool)
+                            holder_count = item.get('holders', 0) or 0
                             
                             tokens.append({
                                 'address': address,
@@ -88,6 +83,8 @@ class SolanaTrackerAPI:
                             })
                         
                         print(f"Successfully parsed {len(tokens)} tokens")
+                        if tokens:
+                            print(f"Sample token data: {tokens[0].get('symbol')} - holders: {tokens[0].get('holders')}, age: {tokens[0].get('createdAt')}")
                         
                         # Sort by creation time (newest first)
                         tokens.sort(key=lambda x: x.get('createdAt', 0), reverse=True)
@@ -515,6 +512,7 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         skipped_no_timestamp = 0
         skipped_filters = 0
+        filter_reasons = {'mc': 0, 'volume': 0, 'age_min': 0, 'age_max': 0, 'liquidity': 0, 'holders': 0}
         
         for token in all_tokens:
             # Get market data with better validation
@@ -541,18 +539,30 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 skipped_no_timestamp += 1
                 age_minutes = 0
             
-            # Apply filters with better validation
-            if (filters['min_mc'] <= mc <= filters['max_mc'] and
-                volume_24h >= filters['min_volume'] and
-                age_minutes >= filters['min_age_minutes'] and
-                age_minutes <= filters['max_age_minutes'] and
-                liquidity >= filters['min_liquidity'] and
-                holders >= filters['min_holders']):
+            # Apply filters with better validation and track reasons
+            passes_mc = filters['min_mc'] <= mc <= filters['max_mc']
+            passes_volume = volume_24h >= filters['min_volume']
+            passes_age_min = age_minutes >= filters['min_age_minutes']
+            passes_age_max = age_minutes <= filters['max_age_minutes']
+            passes_liquidity = liquidity >= filters['min_liquidity']
+            passes_holders = holders >= filters['min_holders']
+            
+            if passes_mc and passes_volume and passes_age_min and passes_age_max and passes_liquidity and passes_holders:
                 filtered_tokens.append(token)
             else:
                 skipped_filters += 1
+                if not passes_mc: filter_reasons['mc'] += 1
+                if not passes_volume: filter_reasons['volume'] += 1
+                if not passes_age_min: filter_reasons['age_min'] += 1
+                if not passes_age_max: filter_reasons['age_max'] += 1
+                if not passes_liquidity: filter_reasons['liquidity'] += 1
+                if not passes_holders: filter_reasons['holders'] += 1
         
         print(f"Filtered results: {len(filtered_tokens)} passed, {skipped_filters} failed filters, {skipped_no_timestamp} had no timestamp")
+        print(f"Filter fail reasons: MC={filter_reasons['mc']}, Vol={filter_reasons['volume']}, AgeMin={filter_reasons['age_min']}, AgeMax={filter_reasons['age_max']}, Liq={filter_reasons['liquidity']}, Holders={filter_reasons['holders']}")
+        if filtered_tokens:
+            sample = filtered_tokens[0]
+            print(f"Sample filtered token: {sample.get('symbol')} - MC: {sample.get('mc')}, Holders: {sample.get('holders')}, Age: {format_age(sample.get('createdAt', 0))}")
         
         if not filtered_tokens:
             keyboard = [[InlineKeyboardButton("« Back", callback_data="back_main")]]
@@ -582,7 +592,10 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result_text += f"📍 `{address}`\n"
                 
                 result_text += f"💰 MC: {format_number(mc)} | 📊 Vol: {format_number(volume)}\n"
-                result_text += f"⏰ {age} | 👥 {holders:,} holders\n\n"
+                if holders > 0:
+                    result_text += f"⏰ {age} | 👥 {holders:,} holders\n\n"
+                else:
+                    result_text += f"⏰ {age}\n\n"
             except Exception as e:
                 print(f"Error formatting token {i}: {e}")
                 continue
