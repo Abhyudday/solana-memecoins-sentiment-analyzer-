@@ -55,16 +55,21 @@ class SolanaTrackerAPI:
                 max_age_minutes = filters.get('max_age_minutes', float('inf'))
                 min_age_minutes = filters.get('min_age_minutes', 0)
                 
+                print(f"🕐 Timestamp calc: current_time={current_time}, min_age={min_age_minutes}min, max_age={max_age_minutes}min")
+                
                 # Only add timestamp filters if values are not infinity
                 if max_age_minutes < float('inf'):
                     # minCreatedAt = current time - max age (oldest allowed)
                     min_created = current_time - int(max_age_minutes * 60)
+                    print(f"  minCreatedAt={min_created} (tokens created AFTER {max_age_minutes} min ago)")
                     params.append(f"minCreatedAt={min_created}")
                 
                 if min_age_minutes > 0:
                     # maxCreatedAt = current time - min age (most recent allowed)
                     max_created = current_time - int(min_age_minutes * 60)
+                    print(f"  maxCreatedAt={max_created} (tokens created BEFORE {min_age_minutes} min ago)")
                     params.append(f"maxCreatedAt={max_created}")
+                    print(f"  ⚠️  Search window: {min_created} to {max_created} (span: {max_created - min_created}s = {(max_created - min_created)/60:.1f}min)")
             
             url = f"{self.BASE_URL}/search?{'&'.join(params)}"
             print(f"Requesting with filters: {url}")
