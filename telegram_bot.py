@@ -539,6 +539,9 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     all_tokens = []
     
+    # Get current time ONCE for consistent filtering
+    current_time = datetime.now().timestamp()
+    
     try:
         # Use Solana Tracker API with server-side filtering
         print("=" * 60)
@@ -571,9 +574,8 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # API already did most filtering, do minimal client-side validation
+        # API already did filtering, only validate data quality (no age re-filtering)
         filtered_tokens = []
-        current_time = datetime.now().timestamp()
         
         print(f"Validating {len(all_tokens)} tokens (API pre-filtered)")
         print(f"Applied filters: MC={filters['min_mc']}-{filters['max_mc']}, Vol>={filters['min_volume']}, Age={filters['min_age_minutes']}-{filters['max_age_minutes']}min, Liq>={filters['min_liquidity']}, Holders>={filters['min_holders']}")
@@ -594,37 +596,33 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"Skipped token due to invalid data: {e}")
                 continue
             
-            # Calculate age in minutes with proper timestamp handling
-            if created_at and created_at > 0:
-                normalized_timestamp = normalize_timestamp(created_at)
-                age_seconds = current_time - normalized_timestamp
-                if age_seconds < 0:  # Future timestamp, skip
-                    print(f"Skipped token with future timestamp: {token.get('symbol')} - timestamp: {created_at}, normalized: {normalized_timestamp}")
-                    continue
-                age_minutes = age_seconds / 60
-            else:
-                # For tokens without timestamp, use current time (treat as just created)
+            # Skip tokens without valid timestamp (API should have filtered these)
+            if not created_at or created_at <= 0:
                 skipped_no_timestamp += 1
-                age_minutes = 0
-                if skipped_no_timestamp <= 3:  # Log first few
+                if skipped_no_timestamp <= 3:
                     print(f"Token without timestamp: {token.get('symbol')} - created_at was {created_at}")
+                continue
             
-            # Apply filters with better validation and track reasons
+            # Check for future timestamps
+            normalized_timestamp = normalize_timestamp(created_at)
+            age_seconds = current_time - normalized_timestamp
+            if age_seconds < 0:
+                print(f"Skipped token with future timestamp: {token.get('symbol')} - timestamp: {created_at}")
+                continue
+            
+            # Only re-filter fields that API doesn't support or for data validation
+            # DO NOT re-filter age since API already did it with correct timestamp
             passes_mc = filters['min_mc'] <= mc <= filters['max_mc']
             passes_volume = volume_24h >= filters['min_volume']
-            passes_age_min = age_minutes >= filters['min_age_minutes']
-            passes_age_max = age_minutes <= filters['max_age_minutes']
             passes_liquidity = liquidity >= filters['min_liquidity']
             passes_holders = holders >= filters['min_holders']
             
-            if passes_mc and passes_volume and passes_age_min and passes_age_max and passes_liquidity and passes_holders:
+            if passes_mc and passes_volume and passes_liquidity and passes_holders:
                 filtered_tokens.append(token)
             else:
                 skipped_filters += 1
                 if not passes_mc: filter_reasons['mc'] += 1
                 if not passes_volume: filter_reasons['volume'] += 1
-                if not passes_age_min: filter_reasons['age_min'] += 1
-                if not passes_age_max: filter_reasons['age_max'] += 1
                 if not passes_liquidity: filter_reasons['liquidity'] += 1
                 if not passes_holders: filter_reasons['holders'] += 1
         
