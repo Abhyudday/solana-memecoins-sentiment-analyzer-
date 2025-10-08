@@ -541,6 +541,17 @@ async def search_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Use Solana Tracker API with server-side filtering
+        print("=" * 60)
+        print("FILTERS BEING SENT TO API:")
+        print(f"  min_mc: {filters.get('min_mc', 'NOT SET')}")
+        print(f"  max_mc: {filters.get('max_mc', 'NOT SET')}")
+        print(f"  min_volume: {filters.get('min_volume', 'NOT SET')}")
+        print(f"  min_liquidity: {filters.get('min_liquidity', 'NOT SET')}")
+        print(f"  min_holders: {filters.get('min_holders', 'NOT SET')}")
+        print(f"  min_age_minutes: {filters.get('min_age_minutes', 'NOT SET')}")
+        print(f"  max_age_minutes: {filters.get('max_age_minutes', 'NOT SET')}")
+        print("=" * 60)
+        
         print("Fetching tokens from SolanaTracker API...")
         api_key = os.getenv('SOLANATRACKER_API_KEY', '')
         solana_api = SolanaTrackerAPI(api_key if api_key else None)
