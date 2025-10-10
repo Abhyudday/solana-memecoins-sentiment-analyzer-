@@ -2,6 +2,8 @@
 import os
 import asyncio
 import re
+import signal
+import sys
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters, ConversationHandler
@@ -1121,16 +1123,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Handle filter selections
         await handle_filter_selection(update, context)
 
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    print(f"\n🛑 Received signal {signum}. Shutting down gracefully...")
+    sys.exit(0)
+
 def main():
     """Start the bot"""
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     
     if not token:
         print("❌ Error: TELEGRAM_BOT_TOKEN environment variable not set")
         return
     
-    # Create application
+    # Create application with better error handling
     application = Application.builder().token(token).build()
+    
+    # Check if we're in a production environment (Railway, Heroku, etc.)
+    is_production = os.getenv('RAILWAY_ENVIRONMENT') or os.getenv('HEROKU_APP_NAME') or os.getenv('RENDER_SERVICE_NAME')
+    webhook_url = os.getenv('WEBHOOK_URL')
+    port = int(os.getenv('PORT', 8000))
     
     # Create conversation handlers for custom filters
     conv_handler_mc = ConversationHandler(
@@ -1191,9 +1207,34 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    # Start bot
+    # Start bot with appropriate mode
     print("🤖 Bot started successfully!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    
+    if is_production and webhook_url:
+        print(f"🌐 Running in WEBHOOK mode on port {port}")
+        print(f"📡 Webhook URL: {webhook_url}")
+        
+        # Use webhook mode for production
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            webhook_url=webhook_url,
+            allowed_updates=Update.ALL_TYPES
+        )
+    else:
+        print("🔄 Running in POLLING mode (development)")
+        
+        # Use polling mode for development with better error handling
+        try:
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,  # Clear any pending updates to avoid conflicts
+                close_loop=False
+            )
+        except Exception as e:
+            print(f"❌ Polling error: {e}")
+            print("💡 If you're seeing 'Conflict' errors, make sure no other bot instances are running")
+            print("💡 For production deployment, set WEBHOOK_URL environment variable")
 
 if __name__ == "__main__":
     main()
