@@ -110,14 +110,14 @@ class SolanaTrackerAPI:
                             token_details = item.get('tokenDetails', {})
                             created_at = token_details.get('time', 0) or 0
                             
-                            # Debug: log timestamp and volume for first few tokens
-                            if len(tokens) < 3:
-                                print(f"Token {item.get('symbol', '?')}: created_time={created_at}, type={type(created_at)}, volume_24h={volume_24h}")
-                            
                             # Get market data directly from root level
                             mc = item.get('marketCapUsd', 0) or 0
                             volume_24h = item.get('volume_24h', 0) or 0
                             liquidity = item.get('liquidityUsd', 0) or 0
+                            
+                            # Debug: log timestamp and volume for first few tokens
+                            if len(tokens) < 3:
+                                print(f"Token {item.get('symbol', '?')}: created_time={created_at}, type={type(created_at)}, volume_24h={volume_24h}")
                             
                             # Get holder count from root level
                             holder_count = item.get('holders', 0) or 0
@@ -1144,9 +1144,16 @@ def main():
     application = Application.builder().token(token).build()
     
     # Check if we're in a production environment (Railway, Heroku, etc.)
-    is_production = os.getenv('RAILWAY_ENVIRONMENT') or os.getenv('HEROKU_APP_NAME') or os.getenv('RENDER_SERVICE_NAME')
+    is_production = os.getenv('RAILWAY_ENVIRONMENT_NAME') or os.getenv('RAILWAY_PROJECT_NAME') or os.getenv('HEROKU_APP_NAME') or os.getenv('RENDER_SERVICE_NAME')
     webhook_url = os.getenv('WEBHOOK_URL')
     port = int(os.getenv('PORT', 8000))
+    
+    # For Railway, auto-generate webhook URL if not provided
+    if is_production and not webhook_url:
+        railway_domain = os.getenv('RAILWAY_PUBLIC_DOMAIN')
+        if railway_domain:
+            webhook_url = f"https://{railway_domain}"
+            print(f"🚀 Auto-detected Railway webhook URL: {webhook_url}")
     
     # Create conversation handlers for custom filters
     conv_handler_mc = ConversationHandler(
