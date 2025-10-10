@@ -108,9 +108,9 @@ class SolanaTrackerAPI:
                             token_details = item.get('tokenDetails', {})
                             created_at = token_details.get('time', 0) or 0
                             
-                            # Debug: log timestamp for first few tokens
+                            # Debug: log timestamp and volume for first few tokens
                             if len(tokens) < 3:
-                                print(f"Token {item.get('symbol', '?')}: created_time={created_at}, type={type(created_at)}")
+                                print(f"Token {item.get('symbol', '?')}: created_time={created_at}, type={type(created_at)}, volume_24h={volume_24h}")
                             
                             # Get market data directly from root level
                             mc = item.get('marketCapUsd', 0) or 0
